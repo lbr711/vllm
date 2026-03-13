@@ -7,6 +7,7 @@ import weakref
 
 import msgspec.msgpack
 import zmq
+import re
 
 from vllm.config import ParallelConfig
 from vllm.logger import init_logger
@@ -154,6 +155,10 @@ class DPCoordinatorProc:
         back_output_address: str,
         back_publish_address: str,
     ):
+        front_publish_address = re.sub(r"\d+\.\d+\.\d+\.\d+", "0.0.0.0", front_publish_address)
+        back_output_address = re.sub(r"\d+\.\d+\.\d+\.\d+", "0.0.0.0", back_output_address)
+        back_publish_address = re.sub(r"\d+\.\d+\.\d+\.\d+", "0.0.0.0", back_publish_address)
+        logger.info(f"[snapshot] change front_publish_address back_output_address back_publish_address to 0.0.0.0")
         decoder = MsgpackDecoder(EngineCoreOutputs)
 
         # For tracking request wave progression.
@@ -202,6 +207,7 @@ class DPCoordinatorProc:
             poller = zmq.Poller()
             poller.register(publish_front, zmq.POLLIN)
             poller.register(output_back, zmq.POLLIN)
+            poller.register(publish_back, zmq.POLLIN)
             last_publish_time = 0
             while True:
                 elapsed = int(time.time() * 1000) - last_publish_time
@@ -230,6 +236,13 @@ class DPCoordinatorProc:
 
                 events = dict(events)
                 wave_state_changed = False
+
+                if publish_back in events:
+                    buffer = publish_back.recv()
+                    if buffer in (b"\x01"):
+                        # Ignore subscription messages.
+                        logger.info(f"[snapshot] dp coordinator publish_back recv {buffer=} from engine core")
+                        publish_back.send(b"READY")
 
                 if publish_front in events:
                     buffer = publish_front.recv()

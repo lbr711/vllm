@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import os
+import socket
 import uuid
 
 import torch
@@ -34,3 +36,17 @@ def length_from_prompt_token_ids_or_embeds(
                 f" prompt_embeds={prompt_embeds_len}"
             )
         return prompt_token_len
+
+
+def is_restore() -> str:
+    return os.path.exists("/root/.grusflag")
+
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(0.1)
+    # 连接到外部服务器（这里用Google的DNS）
+    s.connect(("8.8.8.8", 80))
+    # 获取本地套接字的地址
+    ip = s.getsockname()[0]
+    s.close()
+    return ip
