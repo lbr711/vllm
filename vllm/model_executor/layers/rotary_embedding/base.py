@@ -60,7 +60,7 @@ class RotaryEmbeddingBase(CustomOp):
             if not self.use_flashinfer:
                 cache = cache.to(dtype)
             self.cos_sin_cache: torch.Tensor
-            self.register_buffer("cos_sin_cache", cache, persistent=False)
+            self.register_buffer("cos_sin_cache", cache, persistent=True)
 
             # Reuse a precomputed bf16 cache for the AITER compile path.
             if self.use_aiter and cache.dtype != torch.bfloat16:
