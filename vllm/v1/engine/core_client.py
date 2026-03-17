@@ -4,9 +4,9 @@ import asyncio
 import contextlib
 import multiprocessing
 import queue
-import sys
-import os
 import re
+import sys
+import time
 import uuid
 import weakref
 from abc import ABC, abstractmethod
@@ -23,10 +23,10 @@ import zmq.asyncio
 
 from vllm.config import VllmConfig
 from vllm.envs import VLLM_ENGINE_READY_TIMEOUT_S
-from vllm.utils import is_restore
 from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
 from vllm.tasks import SupportedTask
+from vllm.utils import is_restore
 from vllm.utils.async_utils import in_loop
 from vllm.utils.network_utils import (
     close_sockets,
@@ -49,7 +49,6 @@ from vllm.v1.engine.utils import (
     CoreEngineActorManager,
     CoreEngineProcManager,
     launch_core_engines,
-    get_new_dp_master_ip
 )
 from vllm.v1.executor import Executor
 from vllm.v1.serial_utils import MsgpackDecoder, MsgpackEncoder, bytestr
@@ -224,6 +223,12 @@ class EngineCoreClient(ABC):
         raise NotImplementedError
 
     async def wake_up_async(self, tags: list[str] | None = None) -> None:
+        raise NotImplementedError
+    
+    async def suspend_async(self, model_save_path=None) -> None:
+        raise NotImplementedError
+
+    async def resume_async(self, data_parallel_master_ip: str|None = None, model_path=None) -> None:
         raise NotImplementedError
 
     async def is_sleeping_async(self) -> bool:
@@ -487,18 +492,6 @@ class MPClient(EngineCoreClient):
                 ):
                     self.resources.coordinator = coordinator
                     self.resources.engine_manager = engine_manager
-                # if is_restore() and  self.vllm_config is not None and self.vllm_config.parallel_config.data_parallel_size > 1:
-                #     new_dp_master_ip = get_new_dp_master_ip()
-                #     addresses.inputs[0] = re.sub(r"\d+\.\d+\.\d+\.\d+", new_dp_master_ip, addresses.inputs[0])
-                #     addresses.outputs[0] = re.sub(r"\d+\.\d+\.\d+\.\d+", new_dp_master_ip, addresses.outputs[0])
-                #     if addresses.coordinator_input is not None:
-                #         addresses.coordinator_input = re.sub(r"\d+\.\d+\.\d+\.\d+", new_dp_master_ip, addresses.coordinator_input)
-                #     if addresses.coordinator_output is not None:
-                #         addresses.coordinator_output = re.sub(r"\d+\.\d+\.\d+\.\d+", new_dp_master_ip, addresses.coordinator_output)
-                #     if addresses.frontend_stats_publish_address is not None:
-                #         addresses.frontend_stats_publish_address = re.sub(r"\d+\.\d+\.\d+\.\d+", new_dp_master_ip,
-                #                                                 addresses.frontend_stats_publish_address)
-                # logger.info(f"address:::{addresses}")
 
                 (input_address,) = addresses.inputs
                 (output_address,) = addresses.outputs
@@ -512,6 +505,7 @@ class MPClient(EngineCoreClient):
             self.input_socket = self.resources.input_socket = make_zmq_socket(
                 self.ctx, input_address, zmq.ROUTER, bind=True
             )
+            self.output_address = output_address
             self.resources.output_socket = make_zmq_socket(
                 self.ctx, output_address, zmq.PULL
             )
@@ -890,6 +884,9 @@ class AsyncMPClient(MPClient):
 
                     if outputs.outputs or outputs.scheduler_stats:
                         outputs_queue.put_nowait(outputs)
+            except asyncio.CancelledError:
+                logger.info(f"[snapshot] api server stats_update_task raise cancelled")
+                raise
             except Exception as e:
                 outputs_queue.put_nowait(e)
             except asyncio.CancelledError:
@@ -995,6 +992,12 @@ class AsyncMPClient(MPClient):
     async def wake_up_async(self, tags: list[str] | None = None) -> None:
         await self.call_utility_async("wake_up", tags)
 
+    async def suspend_async(self, model_save_path=None) -> None:
+        await self.call_utility_async("suspend", model_save_path)
+
+    async def resume_async(self, data_parallel_master_ip: str|None = None, model_path=None) -> None:
+        await self.call_utility_async("resume", data_parallel_master_ip, model_path)
+
     async def is_sleeping_async(self) -> bool:
         return await self.call_utility_async("is_sleeping")
 
@@ -1044,6 +1047,8 @@ class DPAsyncMPClient(AsyncMPClient):
         client_index: int = 0,
     ):
         self.current_wave = 0
+        self.is_suspend = False
+        self.is_resume = False
 
         super().__init__(
             vllm_config,
@@ -1103,63 +1108,67 @@ class DPAsyncMPClient(AsyncMPClient):
                 poller.register(socket, zmq.POLLIN)
                 poller.register(first_req_rcv_socket, zmq.POLLIN)
 
-                while True:
-                    events = await poller.poll()
-                    if (
-                        not self.engines_running
-                        and len(events) == 2
-                        or (events[0][0] == first_req_rcv_socket)
-                    ):
-                        # Check if this is a regular request notification or
-                        # scale up notification
-                        buf = first_req_rcv_socket.recv(flags=zmq.NOBLOCK).result()
-
-                        decoded = msgspec.msgpack.decode(buf)
+                try:
+                    while True:
+                        events = await poller.poll()
                         if (
-                            isinstance(decoded, (list, tuple))
-                            and len(decoded) == 2
-                            and decoded[0] == "SCALE_ELASTIC_EP"
+                            not self.engines_running
+                            and len(events) == 2
+                            or (events[0][0] == first_req_rcv_socket)
                         ):
-                            # Extract new engine count from the decoded message
-                            new_engine_count = decoded[1]
-                            # Send scale up notification to coordinator
-                            scale_msg = msgspec.msgpack.encode(
-                                ("SCALE_ELASTIC_EP", new_engine_count)
+                            # Check if this is a regular request notification or
+                            # scale up notification
+                            buf = first_req_rcv_socket.recv(flags=zmq.NOBLOCK).result()
+
+                            decoded = msgspec.msgpack.decode(buf)
+                            if (
+                                isinstance(decoded, (list, tuple))
+                                and len(decoded) == 2
+                                and decoded[0] == "SCALE_ELASTIC_EP"
+                            ):
+                                # Extract new engine count from the decoded message
+                                new_engine_count = decoded[1]
+                                # Send scale up notification to coordinator
+                                scale_msg = msgspec.msgpack.encode(
+                                    ("SCALE_ELASTIC_EP", new_engine_count)
+                                )
+                                await socket.send(scale_msg)
+                                continue
+
+                            # we're sending a request while the engines are
+                            # paused, so that it can wake the others up
+                            # (to run dummy EP loop).
+                            assert decoded[0] == "FIRST_REQ"
+                            target_eng_index = decoded[1]
+                            self.engines_running = True
+                            msg = msgspec.msgpack.encode(
+                                (target_eng_index, self.current_wave)
                             )
-                            await socket.send(scale_msg)
+                            await socket.send(msg)
+
+                        buf = None
+                        while True:
+                            # Drain all stats events (we only care about latest).
+                            future: asyncio.Future[bytes] = socket.recv(flags=zmq.NOBLOCK)
+                            if isinstance(future.exception(), zmq.Again):
+                                break
+                            buf = future.result()
+                        if buf is None:
                             continue
 
-                        # we're sending a request while the engines are
-                        # paused, so that it can wake the others up
-                        # (to run dummy EP loop).
-                        assert decoded[0] == "FIRST_REQ"
-                        target_eng_index = decoded[1]
-                        self.engines_running = True
-                        msg = msgspec.msgpack.encode(
-                            (target_eng_index, self.current_wave)
-                        )
-                        await socket.send(msg)
-
-                    buf = None
-                    while True:
-                        # Drain all stats events (we only care about latest).
-                        future: asyncio.Future[bytes] = socket.recv(flags=zmq.NOBLOCK)
-                        if isinstance(future.exception(), zmq.Again):
-                            break
-                        buf = future.result()
-                    if buf is None:
-                        continue
-
-                    # Update local load-balancing state.
-                    counts, wave, running = msgspec.msgpack.decode(buf)
-                    self.current_wave = wave
-                    self.engines_running = running
-                    if counts is not None:
-                        sliced_counts = counts[count_slice]
-                        self.lb_engines = sliced_counts
-                        logger.debug(
-                            "Received counts: %s (%s)", sliced_counts, count_slice
-                        )
+                        # Update local load-balancing state.
+                        counts, wave, running = msgspec.msgpack.decode(buf)
+                        self.current_wave = wave
+                        self.engines_running = running
+                        if counts is not None:
+                            sliced_counts = counts[count_slice]
+                            self.lb_engines = sliced_counts
+                            logger.debug(
+                                "Received counts: %s (%s)", sliced_counts, count_slice
+                            )
+                except asyncio.CancelledError:
+                    logger.info(f"[snopshot] api server stats_update_task raise cancelled")
+                    raise
 
         resources.stats_update_task = asyncio.create_task(
             run_engine_stats_update_task()
@@ -1184,6 +1193,80 @@ class DPAsyncMPClient(AsyncMPClient):
 
     def get_core_engine_for_request(self, request: EngineCoreRequest):
         return self.core_engine
+
+    async def suspend_async(self, model_save_path=None) -> None:
+        if self.is_suspend:
+            logger.warning("[snapshot] api server is already suspend.")
+            return
+
+        time_before_suspend = time.perf_counter()
+        await self.call_utility_async("suspend", model_save_path)
+        self.is_suspend = True
+        time_after_suspend = time.perf_counter()
+        logger.info(
+            "It took %.6f seconds to fall suspend.", time_after_suspend - time_before_suspend
+        )
+
+    async def wait_for_engines_ready(self):
+        identities = set(self.core_engines)
+        sync_input_socket = zmq.Socket.shadow(self.input_socket)
+        while len(identities):
+            if not sync_input_socket.poll(
+                timeout=VLLM_ENGINE_READY_TIMEOUT_S * 1000  # convert to ms
+            ):
+                raise TimeoutError(
+                    "[snapshot] Timed out waiting for engines to send "
+                    "initial message on input socket."
+                )
+            identity, _ = sync_input_socket.recv_multipart()
+            identities.remove(identity)
+            logger.info(f"[snapshot] Engine {identity} ready. Remaining: {len(identities)}")
+        logger.info("[snapshot] api server wait for all engines ready!")
+
+    async def resume_async(self, data_parallel_master_ip:str|None = None, model_path=None) -> None:
+        if not self.is_suspend:
+            logger.warning("[snapshot] api server is not suspend.")
+            return
+        if self.is_resume:
+            logger.warning("[snapshot] api server is resuming now.")
+            return
+        if not is_restore():
+            logger.warning("[snapshot] api server resume fail, not find /root/.grusflag")
+            return
+
+        time_before_resume = time.perf_counter()
+        self.is_resume = True
+        # 刷新和apiserver和coordinate的连接
+        if not self.resources.stats_update_task.done():
+            self.resources.stats_update_task.cancel()
+            try:
+                await self.resources.stats_update_task
+            except asyncio.CancelledError:
+                logger.info(f"[snapshot] api server stats_update_task cancelled successfully")
+        self.resources.stats_update_task = None
+        self.stats_update_address = re.sub(r"\d+\.\d+\.\d+\.\d+", data_parallel_master_ip, self.stats_update_address)
+        self.first_req_sock_addr = get_open_zmq_inproc_path()
+        self.first_req_send_socket = self.resources.first_req_send_socket = (
+            make_zmq_socket(self.ctx, self.first_req_sock_addr, zmq.PAIR, bind=True)
+        )
+        try:
+            asyncio.get_running_loop()
+            self._ensure_stats_update_task()
+        except RuntimeError:
+            logger.error(f"[snapshot] api server resume_async start stats_update_task failed")
+            raise
+
+        # input socket等待engin core重新注册
+        logger.info(f"[snapshot] api server wait_for_engines_ready")
+        task = asyncio.create_task(self.wait_for_engines_ready())
+        await self.call_utility_async("resume", data_parallel_master_ip, model_path)
+        await task
+        self.is_suspend = False
+        self.is_resume = False
+        time_after_resume = time.perf_counter()
+        logger.info(
+            "It took %.6f seconds to resume.", time_after_resume - time_before_resume,
+        )
 
 
 class DPLBAsyncMPClient(DPAsyncMPClient):

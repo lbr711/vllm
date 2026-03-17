@@ -673,6 +673,16 @@ class MLAAttention(nn.Module, AttentionLayerBase):
     def process_weights_after_loading(self, act_dtype: torch.dtype):
         if hasattr(self.impl, "process_weights_after_loading"):
             self.impl.process_weights_after_loading(act_dtype)
+        if hasattr(self.impl, 'W_UV'):
+            self.register_parameter(
+            'W_UV',
+            torch.nn.Parameter(self.impl.W_UV, requires_grad=False)
+        )
+        if hasattr(self.impl, 'W_UK_T'):
+            self.register_parameter(
+            'W_UK_T',
+            torch.nn.Parameter(self.impl.W_UK_T, requires_grad=False)
+        )
 
         # If we should not load quant weights, we initialize the scales to 1.0
         # as the default value. See [Note: Register q/k/v/prob scales in state dict]

@@ -206,6 +206,7 @@ class EngineCoreRequestType(enum.Enum):
     UTILITY = b"\x03"
     # Sentinel used within EngineCoreProc.
     EXECUTOR_FAILED = b"\x04"
+    READY = b"READY"
 
 
 class ReconfigureDistributedRequest(msgspec.Struct):

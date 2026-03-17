@@ -10,6 +10,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from multiprocessing import connection
 from multiprocessing.process import BaseProcess
+import socket
 from typing import (
     TYPE_CHECKING,
     Any,
