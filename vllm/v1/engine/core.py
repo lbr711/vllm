@@ -1815,9 +1815,6 @@ class EngineCoreProc(EngineCore):
         logger.info(f"[snapshot] [engine] " + "-"*20 + "re_load_weights" + "-"*20)
         self.collective_rpc("re_load_weights", args=(model_path, ))
 
-        logger.info(f"[snapshot] [engine] " + "-"*20 + "recapture_graph" + "-"*20)
-        self.collective_rpc("recapture_graph")
-
         # Refresh worker side_channel_host to new pod IP (only for PD separate scenario).
         logger.info(f"[snapshot] [engine] " + "-" * 20 + "rebuild_kv_transfer_engine_after_resume" + "-" * 20)
         self.collective_rpc("rebuild_kv_transfer_engine_after_resume", args=(local_ip,))
@@ -1825,6 +1822,9 @@ class EngineCoreProc(EngineCore):
         # Refresh scheduler-side KV state in engine core (only for PD separate scenario).
         logger.info(f"[snapshot] [engine] " + "-" * 20 + "snapshot_refresh_scheduler_after_resume" + "-" * 20)
         _refresh_scheduler_after_resume(self, local_ip)
+
+        logger.info(f"[snapshot] [engine] " + "-"*20 + "recapture_graph" + "-"*20)
+        self.collective_rpc("recapture_graph")
 
 
 class DPEngineCoreProc(EngineCoreProc):
