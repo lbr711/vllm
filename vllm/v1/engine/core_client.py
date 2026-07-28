@@ -510,10 +510,13 @@ class MPClient(EngineCoreClient):
             # State used for data parallel.
             self.engines_running = False
             parallel_config = vllm_config.parallel_config
-            # Elastic EP can remove a rank and later add it back with the same
-            # identity. The client input ROUTER needs handover to allow the new
-            # engine to replace the dead connection.
-            enable_input_socket_handover = parallel_config.enable_elastic_ep
+            # Always enable ROUTER_HANDOVER on the client input socket.
+            # Engines reconnect with a fixed identity in several paths:
+            # - elastic EP remove/re-add of the same rank
+            # - snapshot resume recreating the EngineCore input DEALER thread
+            # Without handover, libzmq rejects the new DEALER while the old
+            # identity is still held, and the READY handshake is lost.
+            enable_input_socket_handover = True
 
             self.stats_update_address: str | None = None
             tensor_queue: Queue | None = None
