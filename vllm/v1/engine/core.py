@@ -881,8 +881,7 @@ def _refresh_scheduler_after_resume(engine_core: "EngineCoreProc", local_ip: str
     kv_cfg = getattr(getattr(engine_core, "vllm_config", None), "kv_transfer_config", None)
     if kv_cfg is None:
         return
-    connector_name = getattr(kv_cfg, "kv_connector", "") or ""
-    if "Hybrid" in connector_name or not (
+    if not (
         getattr(kv_cfg, "is_kv_producer", False) or getattr(kv_cfg, "is_kv_consumer", False)
     ):
         return
@@ -1868,13 +1867,20 @@ class EngineCoreProc(EngineCore):
         logger.info(f"[snapshot] [engine] " + "-"*20 + "recapture_graph" + "-"*20)
         self.collective_rpc("recapture_graph")
 
-        # Refresh worker side_channel_host to new pod IP (only for PD separate scenario).
-        logger.info(f"[snapshot] [engine] " + "-" * 20 + "rebuild_kv_transfer_engine_after_resume" + "-" * 20)
-        self.collective_rpc("rebuild_kv_transfer_engine_after_resume", args=(local_ip,))
-
-        # Refresh scheduler-side KV state in engine core (only for PD separate scenario).
+        # Refresh scheduler-side KV state before worker rebuild so the rotated
+        # engine_id is available when rebinding KV transfer endpoints.
         logger.info(f"[snapshot] [engine] " + "-" * 20 + "snapshot_refresh_scheduler_after_resume" + "-" * 20)
         _refresh_scheduler_after_resume(self, local_ip)
+
+        kv_cfg = self.vllm_config.kv_transfer_config
+        new_engine_id = str(kv_cfg.engine_id) if kv_cfg is not None else None
+
+        # Refresh worker side_channel_host to new pod IP (only for PD separate scenario).
+        logger.info(f"[snapshot] [engine] " + "-" * 20 + "rebuild_kv_transfer_engine_after_resume" + "-" * 20)
+        self.collective_rpc(
+            "rebuild_kv_transfer_engine_after_resume",
+            args=(local_ip, new_engine_id),
+        )
 
 
 class DPEngineCoreProc(EngineCoreProc):
