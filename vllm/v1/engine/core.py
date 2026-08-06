@@ -908,6 +908,34 @@ def _refresh_scheduler_after_resume(engine_core: "EngineCoreProc", local_ip: str
         logger.info("[snapshot][rebuild] scheduler engine_id %s->%s", old_id, new_id)
 
 
+def _refresh_scheduler_handshake_metadata_after_resume(
+    engine_core: "EngineCoreProc",
+) -> None:
+    """Refresh scheduler per-rank KV endpoint mappings after worker rebuild."""
+    kv_cfg = getattr(getattr(engine_core, "vllm_config", None), "kv_transfer_config", None)
+    if kv_cfg is None or not getattr(kv_cfg, "is_kv_producer", False):
+        return
+    connector_name = getattr(kv_cfg, "kv_connector", "") or ""
+    if "Layerwise" in connector_name:
+        return
+
+    kv_connector = engine_core.scheduler.get_kv_connector()
+    if kv_connector is None:
+        return
+
+    xfer_handshake_metadata = (
+        engine_core.model_executor.get_kv_connector_handshake_metadata()
+    )
+    if not xfer_handshake_metadata:
+        return
+
+    content: dict[tuple[int, int], Any] = {}
+    for worker_dict in xfer_handshake_metadata:
+        if worker_dict is not None:
+            content.update(worker_dict)
+    kv_connector.set_xfer_handshake_metadata_pp_aware(content)
+
+
 class EngineCoreProc(EngineCore):
     """ZMQ-wrapper for running EngineCore in background process."""
 
@@ -1877,10 +1905,12 @@ class EngineCoreProc(EngineCore):
 
         # Refresh worker side_channel_host to new pod IP (only for PD separate scenario).
         logger.info(f"[snapshot] [engine] " + "-" * 20 + "rebuild_kv_transfer_engine_after_resume" + "-" * 20)
-        self.collective_rpc(
-            "rebuild_kv_transfer_engine_after_resume",
-            args=(local_ip, new_engine_id),
-        )
+        self.collective_rpc("rebuild_kv_transfer_engine_after_resume", args=(local_ip, new_engine_id))
+
+        # Re-collect rebuilt worker metadata so scheduler-side per-rank endpoint
+        # mappings do not keep pre-snapshot addresses.
+        logger.info(f"[snapshot] [engine] " + "-" * 20 + "refresh_scheduler_handshake_metadata_after_resume" + "-" * 20)
+        _refresh_scheduler_handshake_metadata_after_resume(self)
 
 
 class DPEngineCoreProc(EngineCoreProc):
