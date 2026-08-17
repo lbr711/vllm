@@ -182,6 +182,13 @@ def build_app(
 
     register_vllm_serve_api_routers(app)
 
+    if args.snapshot_metadata is not None:
+        from vllm.entrypoints.serve.snapshot.api_router import (
+            attach_router as attach_snapshot_router,
+        )
+
+        attach_snapshot_router(app)
+
     from vllm.entrypoints.openai.models.api_router import (
         attach_router as register_models_api_router,
     )

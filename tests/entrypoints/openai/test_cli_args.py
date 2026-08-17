@@ -64,6 +64,14 @@ def test_config_arg_parsing(serve_parser, cli_config_file):
     assert args.port == 9000
 
 
+def test_snapshot_metadata_arg_parsing(serve_parser):
+    args = serve_parser.parse_args(
+        ["--snapshot-metadata", "/snapshot/snapshot_metadata.json"]
+    )
+
+    assert args.snapshot_metadata == "/snapshot/snapshot_metadata.json"
+
+
 ### Tests for LoRA module parsing
 def test_valid_key_value_format(serve_parser):
     # Test old format: name=path

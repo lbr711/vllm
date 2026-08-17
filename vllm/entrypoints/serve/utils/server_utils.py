@@ -451,6 +451,7 @@ _running_tasks: set[asyncio.Task] = set()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    snapshot_sentinel = None
     try:
         if app.state.log_stats:
             engine_client: EngineClient = app.state.engine_client
@@ -466,12 +467,33 @@ async def lifespan(app: FastAPI):
         else:
             task = None
 
+        if app.state.args.snapshot_metadata is not None:
+            from vllm.entrypoints.serve.snapshot.monitor import SnapshotMonitor
+            from vllm.entrypoints.serve.snapshot.sentinel import SnapshotSentinel
+
+            snapshot_monitor = SnapshotMonitor()
+            app.state.snapshot_monitor = snapshot_monitor
+            snapshot_sentinel = SnapshotSentinel(
+                snapshot_metadata=app.state.args.snapshot_metadata,
+                host=app.state.args.host,
+                port=app.state.args.port,
+                use_tls=bool(
+                    app.state.args.ssl_keyfile and app.state.args.ssl_certfile
+                ),
+                ca_file=app.state.args.ssl_ca_certs,
+                monitor=snapshot_monitor,
+            )
+            snapshot_sentinel.start()
+
         # Mark the startup heap as static so that it's ignored by GC.
         # Reduces pause times of oldest generation collections.
         freeze_gc_heap()
         try:
             yield
         finally:
+            if snapshot_sentinel is not None:
+                snapshot_sentinel.stop()
+                snapshot_sentinel.join(timeout=5)
             if task is not None:
                 task.cancel()
     finally:

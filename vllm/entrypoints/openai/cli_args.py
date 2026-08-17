@@ -229,6 +229,8 @@ class FrontendArgs(BaseFrontendArgs):
     """Host name."""
     port: int = 8000
     """Port number."""
+    snapshot_metadata: str | None = None
+    """Snapshot metadata file. Enables the snapshot sentinel when provided."""
     data_parallel_supervisor_port: int = 9256
     """HTTP port for aggregated health endpoints in multi-port external LB
     mode."""
