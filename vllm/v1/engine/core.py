@@ -36,14 +36,17 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.tasks import POOLING_TASKS, SupportedTask
 from vllm.tracing import instrument, maybe_init_worker_tracer
 from vllm.transformers_utils.config import maybe_register_config_serialize_by_value
-from vllm.utils import numa_utils
+from vllm.utils import get_local_ip, is_restore, numa_utils
 from vllm.utils.gc_utils import (
     freeze_gc_heap,
     maybe_attach_gc_debug_callback,
 )
-from vllm.utils import get_local_ip
 from vllm.utils.hashing import get_hash_fn_by_name
-from vllm.utils.network_utils import make_zmq_socket
+from vllm.utils.network_utils import (
+    make_zmq_socket,
+    replace_zmq_tcp_host,
+    split_zmq_path,
+)
 from vllm.utils.system_utils import decorate_logs, set_process_title
 from vllm.v1.core.kv_cache_utils import (
     BlockHash,
@@ -953,6 +956,7 @@ class EngineCoreProc(EngineCore):
         log_stats: bool,
         client_handshake_address: str | None = None,
         tensor_queue: Queue | None = None,
+        snapshot_metadata: str | None = None,
         *,
         engine_index: int = 0,
     ):
@@ -967,6 +971,8 @@ class EngineCoreProc(EngineCore):
         self.shutdown_state = EngineShutdownState.RUNNING
         self.addresses = None
         self.identity = identity
+        self._transport_lock = threading.Lock()
+        self._transport_restored = False
 
         # Receiver for tensor IPC
         self.tensor_ipc_receiver: TensorIpcReceiver | None = None
@@ -1016,42 +1022,105 @@ class EngineCoreProc(EngineCore):
                 internal_dp_balancing,
             )
 
-            # Background Threads and Queues for IO. These enable us to
-            # overlap ZMQ socket IO with GPU since they release the GIL,
-            # and to overlap some serialization/deserialization with the
-            # model forward pass.
-            # Threads handle Socket <-> Queues and core_busy_loop uses Queue.
-            ready_event = threading.Event()
-            self.input_thread = threading.Thread(
-                target=self.process_input_sockets,
-                args=(
-                    addresses.inputs,
-                    addresses.coordinator_input,
-                    identity,
-                    ready_event,
-                ),
-                daemon=True,
-            )
-            self.input_thread.start()
+            self._start_io_threads()
 
-            self.output_thread = threading.Thread(
-                target=self.process_output_sockets,
-                args=(
-                    addresses.outputs,
-                    addresses.coordinator_output,
-                    self.engine_index,
-                ),
+        if snapshot_metadata is not None and any(
+            split_zmq_path(address)[0] == "tcp" for address in self.addresses.inputs
+        ):
+            threading.Thread(
+                target=self._restore_transport_from_metadata,
+                args=(snapshot_metadata,),
                 daemon=True,
-            )
-            self.output_thread.start()
+                name="snapshot-transport",
+            ).start()
 
-            # Don't complete handshake until DP coordinator ready message is
-            # received.
-            while not ready_event.wait(timeout=10):
-                if not self.input_thread.is_alive():
-                    raise RuntimeError("Input socket thread died during startup")
-                assert addresses.coordinator_input is not None
-                logger.info("Waiting for READY message from DP Coordinator...")
+    def _start_io_threads(self) -> None:
+        """Start the EngineCore input and output socket threads."""
+        ready_event = threading.Event()
+        self._input_stop_event = threading.Event()
+        self.input_thread = threading.Thread(
+            target=self.process_input_sockets,
+            args=(
+                self.addresses.inputs,
+                self.addresses.coordinator_input,
+                self.identity,
+                ready_event,
+                self._input_stop_event,
+            ),
+            daemon=True,
+        )
+        self.input_thread.start()
+
+        self.output_thread = threading.Thread(
+            target=self.process_output_sockets,
+            args=(
+                self.addresses.outputs,
+                self.addresses.coordinator_output,
+                self.engine_index,
+            ),
+            daemon=True,
+        )
+        self.output_thread.start()
+
+        # Don't complete handshake until DP coordinator ready message is received.
+        while not ready_event.wait(timeout=10):
+            if not self.input_thread.is_alive():
+                raise RuntimeError("Input socket thread died during startup")
+            assert self.addresses.coordinator_input is not None
+            logger.info("Waiting for READY message from DP Coordinator...")
+
+    def _stop_io_threads(self) -> None:
+        """Stop the EngineCore input and output socket threads."""
+        self._input_stop_event.set()
+        self.output_queue.put(EngineCoreProc.ENGINE_CORE_THREAD_FINISH)
+        self.input_thread.join(timeout=9999)
+        self.output_thread.join(timeout=9999)
+
+    def _reconnect_transport(self, data_parallel_master_ip: str) -> None:
+        """Reconnect EngineCore sockets to the restored master Pod IP."""
+        logger.info(
+            "[snapshot] engine core reconnecting transport to %s",
+            data_parallel_master_ip,
+        )
+        self._stop_io_threads()
+        self.vllm_config.parallel_config.data_parallel_master_ip = (
+            data_parallel_master_ip
+        )
+        self.addresses.inputs = [
+            replace_zmq_tcp_host(address, data_parallel_master_ip)
+            for address in self.addresses.inputs
+        ]
+        self.addresses.outputs = [
+            replace_zmq_tcp_host(address, data_parallel_master_ip)
+            for address in self.addresses.outputs
+        ]
+        if self.addresses.coordinator_input is not None:
+            self.addresses.coordinator_input = replace_zmq_tcp_host(
+                self.addresses.coordinator_input, data_parallel_master_ip
+            )
+        if self.addresses.coordinator_output is not None:
+            self.addresses.coordinator_output = replace_zmq_tcp_host(
+                self.addresses.coordinator_output, data_parallel_master_ip
+            )
+        self._start_io_threads()
+
+    def _restore_transport_from_metadata(self, snapshot_metadata: str) -> None:
+        try:
+            while not is_restore():
+                time.sleep(1)
+
+            from vllm.entrypoints.serve.snapshot.utils import load_snapshot_metadata
+
+            data_parallel_master_ip = load_snapshot_metadata(
+                snapshot_metadata, "data_parallel_master_ip"
+            )
+            with self._transport_lock:
+                self._reconnect_transport(data_parallel_master_ip)
+                self._transport_restored = True
+        except Exception:
+            logger.exception("[snapshot] engine core transport restore failed")
+            self.shutdown_state = EngineShutdownState.REQUESTED
+            self.input_queue.put_nowait((EngineCoreRequestType.WAKEUP, None))
 
     @contextmanager
     def _perform_handshakes(
@@ -1532,6 +1601,7 @@ class EngineCoreProc(EngineCore):
         coord_input_address: str | None,
         identity: bytes,
         ready_event: threading.Event,
+        stop_event: threading.Event,
     ):
         """Input socket IO thread."""
 
@@ -1590,9 +1660,8 @@ class EngineCoreProc(EngineCore):
 
             ready_event.set()
             del ready_event
-            flag = True
-            while flag:
-                for input_socket, _ in poller.poll():
+            while not stop_event.is_set():
+                for input_socket, _ in poller.poll(timeout=100):
                     parts = input_socket.recv_multipart(copy=False)
                     # (RequestType, RequestData)
                     type_frame, *data_frames = parts
@@ -1624,11 +1693,6 @@ class EngineCoreProc(EngineCore):
 
                     # Push to input queue for core busy loop.
                     self.input_queue.put_nowait((request_type, request))
-
-                    if len(parts) == 2 and (b'resume' in bytes(parts[1].buffer)):
-                        logger.info(f"[snapshot] engine core input thread received resume, stop input thread")
-                        flag = False
-                        break
 
     def process_output_sockets(
         self, output_paths: list[str], coord_output_path: str | None, engine_index: int
@@ -1806,54 +1870,10 @@ class EngineCoreProc(EngineCore):
         self.collective_rpc("aclrt_snapshot_process_unlock")
 
     def resume(self, data_parallel_master_ip:str|None = None, model_path=None):
-        # re-create I/O thread, refreshing the connection to the DP coordinator
-        logger.info(f"[snapshot] [engine] " + "-"*20 + "stop input and output thread" + "-"*20)
-        self.output_queue.put(EngineCoreProc.ENGINE_CORE_THREAD_FINISH)
-        self.input_thread.join(timeout=9999)
-        self.output_thread.join(timeout=9999)
-
-        logger.info(f"[snapshot] [engine] " + "-"*20 + "start input and output thread" + "-"*20)
-        self.vllm_config.parallel_config.data_parallel_master_ip = data_parallel_master_ip
-
-        if self.addresses.coordinator_input is not None and data_parallel_master_ip is not None:
-            self.addresses.coordinator_input = re.sub(
-                r"\d+\.\d+\.\d+\.\d+", data_parallel_master_ip, self.addresses.coordinator_input,
-            )
-        if self.addresses.coordinator_output is not None and data_parallel_master_ip is not None:
-            self.addresses.coordinator_output = re.sub(
-                r"\d+\.\d+\.\d+\.\d+", data_parallel_master_ip, self.addresses.coordinator_output,
-            )
-
-        ready_event = threading.Event()
-        self.input_thread = threading.Thread(
-            target=self.process_input_sockets,
-            args=(
-                self.addresses.inputs,
-                self.addresses.coordinator_input,
-                self.identity,
-                ready_event,
-            ),
-            daemon=True,
-        )
-        self.input_thread.start()
-
-        self.output_thread = threading.Thread(
-            target=self.process_output_sockets,
-            args=(
-                self.addresses.outputs,
-                self.addresses.coordinator_output,
-                self.engine_index,
-            ),
-            daemon=True,
-        )
-        self.output_thread.start()
-
-        # Don't complete handshake until DP coordinator ready message is received.
-        while not ready_event.wait(timeout=10):
-            if not self.input_thread.is_alive():
-                raise RuntimeError("Input socket thread died during startup")
-            assert self.addresses.coordinator_input is not None
-            logger.info("Waiting for READY message from DP Coordinator...")
+        assert data_parallel_master_ip is not None
+        with self._transport_lock:
+            if not self._transport_restored:
+                self._reconnect_transport(data_parallel_master_ip)
 
         logger.info(f"[snapshot] [engine] " + "-"*20 + "aclrt_snapshot_process_restore" + "-"*20)
         self.collective_rpc("aclrt_snapshot_process_restore")
@@ -1926,6 +1946,7 @@ class DPEngineCoreProc(EngineCoreProc):
         log_stats: bool,
         client_handshake_address: str | None = None,
         tensor_queue: Queue | None = None,
+        snapshot_metadata: str | None = None,
     ):
         assert vllm_config.model_config.is_moe, (
             "DPEngineCoreProc should only be used for MoE models"
@@ -1960,6 +1981,7 @@ class DPEngineCoreProc(EngineCoreProc):
             client_handshake_address,
             engine_index=dp_rank,
             tensor_queue=tensor_queue,
+            snapshot_metadata=snapshot_metadata,
         )
 
     def _init_data_parallel(self, vllm_config: VllmConfig):

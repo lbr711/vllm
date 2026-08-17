@@ -136,6 +136,7 @@ class CoreEngineProcManager:
         log_stats: bool,
         client_handshake_address: str | None = None,
         tensor_queue: Queue | None = None,
+        snapshot_metadata: str | None = None,
     ):
         context = get_mp_context()
         common_kwargs = {
@@ -145,6 +146,7 @@ class CoreEngineProcManager:
             "executor_class": executor_class,
             "log_stats": log_stats,
             "tensor_queue": tensor_queue,
+            "snapshot_metadata": snapshot_metadata,
         }
 
         if client_handshake_address:
@@ -1052,6 +1054,7 @@ def launch_core_engines(
     log_stats: bool,
     addresses: EngineZmqAddresses,
     num_api_servers: int = 1,
+    snapshot_metadata: str | None = None,
 ) -> Iterator[
     tuple[
         CoreEngineProcManager | CoreEngineActorManager | None,
@@ -1180,6 +1183,7 @@ def launch_core_engines(
                 start_index=dp_rank,
                 local_start_index=local_start_index or 0,
                 tensor_queue=tensor_queue,
+                snapshot_metadata=snapshot_metadata,
             )
         else:
             local_engine_manager = None

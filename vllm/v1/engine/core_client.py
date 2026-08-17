@@ -34,6 +34,7 @@ from vllm.utils.network_utils import (
     close_sockets,
     get_open_zmq_inproc_path,
     make_zmq_socket,
+    split_zmq_path,
 )
 from vllm.v1.engine import (
     EEP_NOTIFICATION_CALL_ID,
@@ -115,6 +116,7 @@ class EngineCoreClient(ABC):
         client_addresses: dict[str, Any] | None = None,
         client_count: int = 1,
         client_index: int = 0,
+        snapshot_metadata: str | None = None,
     ) -> "AsyncMPClient":
         parallel_config = vllm_config.parallel_config
         client_args = (
@@ -124,6 +126,7 @@ class EngineCoreClient(ABC):
             client_addresses,
             client_count,
             client_index,
+            snapshot_metadata,
         )
         if parallel_config.data_parallel_size > 1:
             if parallel_config.data_parallel_external_lb:
@@ -493,6 +496,7 @@ class MPClient(EngineCoreClient):
         executor_class: type[Executor],
         log_stats: bool,
         client_addresses: dict[str, Any] | None = None,
+        snapshot_metadata: str | None = None,
     ):
         self.vllm_config = vllm_config
 
@@ -562,9 +566,10 @@ class MPClient(EngineCoreClient):
             else:
                 # Engines are managed by this client.
                 addresses = get_engine_zmq_addresses(vllm_config)
+                input_address = addresses.inputs[0]
                 self.input_socket = self.resources.input_socket = make_zmq_socket(
                     self.ctx,
-                    addresses.inputs[0],
+                    input_address,
                     zmq.ROUTER,
                     bind=True,
                     router_handover=enable_input_socket_handover,
@@ -583,7 +588,11 @@ class MPClient(EngineCoreClient):
                 ).decode()
 
                 with launch_core_engines(
-                    vllm_config, executor_class, log_stats, addresses
+                    vllm_config,
+                    executor_class,
+                    log_stats,
+                    addresses,
+                    snapshot_metadata=snapshot_metadata,
                 ) as (engine_manager, coordinator, addresses, tensor_queue):
                     self.resources.coordinator = coordinator
                     self.resources.engine_manager = engine_manager
@@ -593,6 +602,10 @@ class MPClient(EngineCoreClient):
                     assert self.stats_update_address == (
                         coordinator.get_stats_publish_address()
                     )
+
+            self._snapshot_transport_reconnect = (
+                split_zmq_path(input_address)[0] == "tcp"
+            )
 
             # Serialization setup with tensor queues for multimodal tensor IPC.
             tensor_ipc_sender: TensorIpcSender | None = None
@@ -959,6 +972,7 @@ class AsyncMPClient(MPClient):
         client_addresses: dict[str, Any] | None = None,
         client_count: int = 1,
         client_index: int = 0,
+        snapshot_metadata: str | None = None,
     ):
         super().__init__(
             asyncio_mode=True,
@@ -966,6 +980,7 @@ class AsyncMPClient(MPClient):
             executor_class=executor_class,
             log_stats=log_stats,
             client_addresses=client_addresses,
+            snapshot_metadata=snapshot_metadata,
         )
 
         # Lifecycle guards for suspend/resume re-entrancy.
@@ -1220,10 +1235,15 @@ class AsyncMPClient(MPClient):
         time_before_resume = time.perf_counter()
         self.is_resume = True
 
+        assert data_parallel_master_ip is not None
         logger.info(f"[snapshot] api server wait_for_engines_ready")
         task = asyncio.create_task(self.wait_for_engines_ready())
-        await self.call_utility_async("resume", data_parallel_master_ip, model_path)
-        await task
+        if self._snapshot_transport_reconnect:
+            await task
+            await self.call_utility_async("resume", data_parallel_master_ip, model_path)
+        else:
+            await self.call_utility_async("resume", data_parallel_master_ip, model_path)
+            await task
         self.is_suspend = False
         self.is_resume = False
         time_after_resume = time.perf_counter()
@@ -1278,6 +1298,7 @@ class DPAsyncMPClient(AsyncMPClient):
         client_addresses: dict[str, Any] | None = None,
         client_count: int = 1,
         client_index: int = 0,
+        snapshot_metadata: str | None = None,
     ):
         self.current_wave = 0
 
@@ -1288,6 +1309,7 @@ class DPAsyncMPClient(AsyncMPClient):
             client_addresses,
             client_count,
             client_index,
+            snapshot_metadata,
         )
 
         # List of [waiting, running] pair per engine.
@@ -1468,6 +1490,7 @@ class DPAsyncMPClient(AsyncMPClient):
 
         time_before_resume = time.perf_counter()
         self.is_resume = True
+        assert data_parallel_master_ip is not None
         # refresh the connection to the DP coordinator
         if not self.resources.stats_update_task.done():
             self.resources.stats_update_task.cancel()
@@ -1491,8 +1514,12 @@ class DPAsyncMPClient(AsyncMPClient):
         # Wait for engines send READY message to client
         logger.info(f"[snapshot] api server wait_for_engines_ready")
         task = asyncio.create_task(self.wait_for_engines_ready())
-        await self.call_utility_async("resume", data_parallel_master_ip, model_path)
-        await task
+        if self._snapshot_transport_reconnect:
+            await task
+            await self.call_utility_async("resume", data_parallel_master_ip, model_path)
+        else:
+            await self.call_utility_async("resume", data_parallel_master_ip, model_path)
+            await task
         self.is_suspend = False
         self.is_resume = False
         time_after_resume = time.perf_counter()
@@ -1513,6 +1540,7 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
         client_addresses: dict[str, Any] | None = None,
         client_count: int = 1,
         client_index: int = 0,
+        snapshot_metadata: str | None = None,
     ):
         self.client_count = client_count
 
@@ -1526,6 +1554,7 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
             client_addresses,
             client_count,
             client_index,
+            snapshot_metadata,
         )
 
         assert len(self.core_engines) > 1

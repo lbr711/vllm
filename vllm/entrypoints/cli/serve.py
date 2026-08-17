@@ -241,6 +241,7 @@ def run_headless(args: argparse.Namespace):
         handshake_address=handshake_address,
         executor_class=Executor.get_class(vllm_config),
         log_stats=not engine_args.disable_log_stats,
+        snapshot_metadata=args.snapshot_metadata,
     )
 
     try:
@@ -321,7 +322,12 @@ def run_multi_api_server(args: argparse.Namespace):
     )
 
     with launch_core_engines(
-        vllm_config, executor_class, log_stats, addresses, num_api_servers
+        vllm_config,
+        executor_class,
+        log_stats,
+        addresses,
+        num_api_servers,
+        snapshot_metadata=args.snapshot_metadata,
     ) as (local_engine_manager, coordinator, addresses, tensor_queue):
         stats_update_address = (
             coordinator.get_stats_publish_address() if coordinator else None

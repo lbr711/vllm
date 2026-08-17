@@ -100,6 +100,7 @@ async def build_async_engine_client(
         engine_args,
         usage_context=usage_context,
         client_config=client_config,
+        snapshot_metadata=args.snapshot_metadata,
     ) as engine:
         yield engine
 
@@ -110,6 +111,7 @@ async def build_async_engine_client_from_engine_args(
     *,
     usage_context: UsageContext = UsageContext.OPENAI_API_SERVER,
     client_config: dict[str, Any] | None = None,
+    snapshot_metadata: str | None = None,
 ) -> AsyncIterator[EngineClient]:
     """
     Create EngineClient, either:
@@ -141,6 +143,7 @@ async def build_async_engine_client_from_engine_args(
             client_addresses=client_config,
             client_count=client_count,
             client_index=client_index,
+            snapshot_metadata=snapshot_metadata,
         )
 
         # Don't keep the dummy data in memory
