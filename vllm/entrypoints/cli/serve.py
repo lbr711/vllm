@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import argparse
+import multiprocessing
 import signal
 import time
 
@@ -241,7 +242,7 @@ def run_headless(args: argparse.Namespace):
         handshake_address=handshake_address,
         executor_class=Executor.get_class(vllm_config),
         log_stats=not engine_args.disable_log_stats,
-        snapshot_metadata=args.snapshot_metadata,
+        snapshot_metadata=args.snapshot_config.snapshot_metadata,
     )
 
     try:
@@ -327,7 +328,7 @@ def run_multi_api_server(args: argparse.Namespace):
         log_stats,
         addresses,
         num_api_servers,
-        snapshot_metadata=args.snapshot_metadata,
+        snapshot_metadata=args.snapshot_config.snapshot_metadata,
     ) as (local_engine_manager, coordinator, addresses, tensor_queue):
         stats_update_address = (
             coordinator.get_stats_publish_address() if coordinator else None
@@ -345,6 +346,17 @@ def run_multi_api_server(args: argparse.Namespace):
                 stats_update_address=stats_update_address,
             )
         else:
+            from vllm.entrypoints.serve.snapshot.monitor import SnapshotMonitor
+
+            # All API workers must observe the same lifecycle state. Create the
+            # synchronization primitives from the same spawn context used by
+            # APIServerProcessManager to make the monitor process-shared.
+            spawn_context = multiprocessing.get_context("spawn")
+            snapshot_monitor = SnapshotMonitor(
+                spawn_context.Event,
+                spawn_context.Lock,
+            )
+
             # Start API server(s).
             api_server_manager = APIServerProcessManager(
                 listen_address=listen_address,
@@ -355,6 +367,7 @@ def run_multi_api_server(args: argparse.Namespace):
                 output_addresses=addresses.outputs,
                 stats_update_address=stats_update_address,
                 tensor_queue=tensor_queue,
+                snapshot_monitor=snapshot_monitor,
             )
 
             if not is_ray_dp:

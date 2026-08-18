@@ -4,7 +4,6 @@
 import json
 from unittest.mock import patch
 
-from vllm.entrypoints.serve.snapshot.monitor import SnapshotMonitor
 from vllm.entrypoints.serve.snapshot.sentinel import (
     DEVICE_UNLOCK_TIMEOUT,
     RESUME_TIMEOUT,
@@ -20,11 +19,10 @@ def _sentinel(metadata_path: str) -> SnapshotSentinel:
         port=8000,
         use_tls=False,
         ca_file=None,
-        monitor=SnapshotMonitor(),
     )
 
 
-def test_suspend_uses_snapshot_metadata_and_marks_completion(tmp_path):
+def test_suspend_uses_snapshot_metadata(tmp_path):
     metadata_path = tmp_path / "metadata.json"
     metadata_path.write_text(
         json.dumps({"model_save_path": "/snapshot/weights"}),
@@ -41,7 +39,6 @@ def test_suspend_uses_snapshot_metadata_and_marks_completion(tmp_path):
         SUSPEND_TIMEOUT,
         {"model_save_path": "/snapshot/weights"},
     )
-    assert sentinel._monitor.is_suspend_done
 
 
 def test_checkpoint_unlocks_device_and_stops_on_cold_start(tmp_path):
@@ -60,11 +57,10 @@ def test_checkpoint_unlocks_device_and_stops_on_cold_start(tmp_path):
         sentinel._reach_checkpoint()
 
     request.assert_called_once_with("POST", "/device_unlock", DEVICE_UNLOCK_TIMEOUT)
-    assert sentinel._monitor.is_unlock_done
     assert sentinel._stop_event.is_set()
 
 
-def test_resume_uses_snapshot_metadata_and_marks_completion(tmp_path):
+def test_resume_uses_snapshot_metadata(tmp_path):
     metadata_path = tmp_path / "metadata.json"
     metadata_path.write_text(
         json.dumps(
@@ -89,4 +85,3 @@ def test_resume_uses_snapshot_metadata_and_marks_completion(tmp_path):
             "data_parallel_master_ip": "10.0.0.1",
         },
     )
-    assert sentinel._monitor.is_resume_done

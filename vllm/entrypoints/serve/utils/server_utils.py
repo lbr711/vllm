@@ -467,23 +467,28 @@ async def lifespan(app: FastAPI):
         else:
             task = None
 
-        if app.state.args.snapshot_metadata is not None:
-            from vllm.entrypoints.serve.snapshot.monitor import SnapshotMonitor
+        # This is the same monitor EngineCoreClient updates while executing the
+        # lifecycle APIs, so /snapshot/health observes completed operations.
+        snapshot_monitor = app.state.args._snapshot_monitor
+        app.state.snapshot_monitor = snapshot_monitor
+        snapshot_config = app.state.args.snapshot_config
+        if snapshot_config.enable_auto_checkpoint:
             from vllm.entrypoints.serve.snapshot.sentinel import SnapshotSentinel
 
-            snapshot_monitor = SnapshotMonitor()
-            app.state.snapshot_monitor = snapshot_monitor
-            snapshot_sentinel = SnapshotSentinel(
-                snapshot_metadata=app.state.args.snapshot_metadata,
-                host=app.state.args.host,
-                port=app.state.args.port,
-                use_tls=bool(
-                    app.state.args.ssl_keyfile and app.state.args.ssl_certfile
-                ),
-                ca_file=app.state.args.ssl_ca_certs,
-                monitor=snapshot_monitor,
-            )
-            snapshot_sentinel.start()
+            assert snapshot_config.snapshot_metadata is not None
+            # Multiple API workers share the listening socket. Run one sentinel
+            # to avoid issuing the same lifecycle request more than once.
+            if app.state.args._snapshot_sentinel_leader:
+                snapshot_sentinel = SnapshotSentinel(
+                    snapshot_metadata=snapshot_config.snapshot_metadata,
+                    host=app.state.args.host,
+                    port=app.state.args.port,
+                    use_tls=bool(
+                        app.state.args.ssl_keyfile and app.state.args.ssl_certfile
+                    ),
+                    ca_file=app.state.args.ssl_ca_certs,
+                )
+                snapshot_sentinel.start()
 
         # Mark the startup heap as static so that it's ignored by GC.
         # Reduces pause times of oldest generation collections.

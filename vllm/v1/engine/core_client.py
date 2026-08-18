@@ -244,11 +244,13 @@ class EngineCoreClient(ABC):
 
     async def wake_up_async(self, tags: list[str] | None = None) -> None:
         raise NotImplementedError
-    
+
     async def suspend_async(self, model_save_path=None) -> None:
         raise NotImplementedError
 
-    async def resume_async(self, data_parallel_master_ip: str|None = None, model_path=None) -> None:
+    async def resume_async(
+        self, data_parallel_master_ip: str | None = None, model_path=None
+    ) -> None:
         raise NotImplementedError
 
     async def device_unlock_async(self) -> None:
@@ -523,8 +525,13 @@ class MPClient(EngineCoreClient):
             enable_input_socket_handover = True
 
             self.stats_update_address: str | None = None
+            # API workers receive a process-shared monitor from their parent.
+            # Other EngineCoreClient users retain the local lifecycle fields.
+            self.snapshot_monitor = (
+                client_addresses.get("snapshot_monitor") if client_addresses else None
+            )
             tensor_queue: Queue | None = None
-            if client_addresses:
+            if client_addresses and "input_address" in client_addresses:
                 # Engines are managed externally to this client.
                 input_address = client_addresses["input_address"]
                 output_address = client_addresses["output_address"]
@@ -706,6 +713,89 @@ class MPClient(EngineCoreClient):
 
     def dp_engines_running(self) -> bool:
         return self.engines_running
+
+    # Keep lifecycle transitions in the shared monitor when one is supplied by
+    # vllm serve. Direct/offline clients use the equivalent per-client fields.
+    def _snapshot_is_suspend_done(self) -> bool:
+        return (
+            self.snapshot_monitor.is_suspend_done
+            if self.snapshot_monitor is not None
+            else self.suspend_done
+        )
+
+    def _snapshot_try_start_suspending(self) -> bool:
+        if self.snapshot_monitor is not None:
+            return self.snapshot_monitor.try_start_suspending()
+        if self.is_suspending or self.suspend_done:
+            return False
+        self.is_suspending = True
+        return True
+
+    def _snapshot_mark_suspend_done(self) -> None:
+        if self.snapshot_monitor is not None:
+            self.snapshot_monitor.mark_suspend_done()
+        else:
+            self.suspend_done = True
+            self.is_suspending = False
+
+    def _snapshot_mark_suspend_failed(self) -> None:
+        if self.snapshot_monitor is not None:
+            self.snapshot_monitor.mark_suspend_failed()
+        else:
+            self.is_suspending = False
+
+    def _snapshot_try_start_unlocking(self) -> bool:
+        if self.snapshot_monitor is not None:
+            return self.snapshot_monitor.try_start_unlocking()
+        if (
+            not self.suspend_done
+            or self.is_unlocking
+            or self.unlock_done
+            or self.is_resuming
+            or self.resume_done
+        ):
+            return False
+        self.is_unlocking = True
+        return True
+
+    def _snapshot_mark_unlock_done(self) -> None:
+        if self.snapshot_monitor is not None:
+            self.snapshot_monitor.mark_unlock_done()
+        else:
+            self.unlock_done = True
+            self.is_unlocking = False
+
+    def _snapshot_mark_unlock_failed(self) -> None:
+        if self.snapshot_monitor is not None:
+            self.snapshot_monitor.mark_unlock_failed()
+        else:
+            self.is_unlocking = False
+
+    def _snapshot_try_start_resuming(self) -> bool:
+        if self.snapshot_monitor is not None:
+            return self.snapshot_monitor.try_start_resuming()
+        if (
+            not self.suspend_done
+            or self.is_unlocking
+            or self.is_resuming
+            or self.resume_done
+        ):
+            return False
+        self.is_resuming = True
+        return True
+
+    def _snapshot_mark_resume_done(self) -> None:
+        if self.snapshot_monitor is not None:
+            self.snapshot_monitor.mark_resume_done()
+        else:
+            self.resume_done = True
+            self.is_resuming = False
+
+    def _snapshot_mark_resume_failed(self) -> None:
+        if self.snapshot_monitor is not None:
+            self.snapshot_monitor.mark_resume_failed()
+        else:
+            self.is_resuming = False
 
     def start_engine_core_monitor(self):
         """Start a monitor thread for engine core processes."""
@@ -984,8 +1074,12 @@ class AsyncMPClient(MPClient):
         )
 
         # Lifecycle guards for suspend/resume re-entrancy.
-        self.is_suspend = False
-        self.is_resume = False
+        self.is_suspending = False
+        self.is_unlocking = False
+        self.is_resuming = False
+        self.suspend_done = False
+        self.unlock_done = False
+        self.resume_done = False
         self.client_count = client_count
         self.client_index = client_index
         self.outputs_queue = asyncio.Queue[EngineCoreOutputs | Exception]()
@@ -1193,62 +1287,93 @@ class AsyncMPClient(MPClient):
                 )
             identity, _ = sync_input_socket.recv_multipart()
             identities.remove(identity)
-            logger.info(f"[snapshot] Engine {identity} ready. Remaining: {len(identities)}")
+            logger.info(
+                "[snapshot] Engine %s ready. Remaining: %d",
+                identity,
+                len(identities),
+            )
         logger.info("[snapshot] api server wait for all engines ready!")
 
     async def suspend_async(self, model_save_path=None) -> None:
-        if self.is_suspend:
-            logger.warning("[snapshot] api server is already suspend.")
+        if not self._snapshot_try_start_suspending():
+            logger.warning("[snapshot] api server is suspending or already suspended.")
             return
 
         time_before_suspend = time.perf_counter()
-        await self.call_utility_async("suspend", model_save_path)
-        self.is_suspend = True
+        try:
+            await self.call_utility_async("suspend", model_save_path)
+        except BaseException:
+            self._snapshot_mark_suspend_failed()
+            raise
+        self._snapshot_mark_suspend_done()
         time_after_suspend = time.perf_counter()
         logger.info(
-            "It took %.6f seconds to fall suspend.", time_after_suspend - time_before_suspend
+            "It took %.6f seconds to fall suspend.",
+            time_after_suspend - time_before_suspend,
         )
 
     async def device_unlock_async(self) -> None:
-        if not self.is_suspend:
-            logger.warning("[snapshot] api server is not suspend, skip device_unlock.")
+        if not self._snapshot_try_start_unlocking():
+            logger.warning(
+                "[snapshot] api server cannot unlock or is already unlocking."
+            )
             return
 
         time_before_unlock = time.perf_counter()
-        await self.call_utility_async("device_unlock")
+        try:
+            await self.call_utility_async("device_unlock")
+        except BaseException:
+            self._snapshot_mark_unlock_failed()
+            raise
+        self._snapshot_mark_unlock_done()
         time_after_unlock = time.perf_counter()
         logger.info(
             "It took %.6f seconds to device_unlock.",
             time_after_unlock - time_before_unlock,
         )
 
-    async def resume_async(self, data_parallel_master_ip: str|None = None, model_path=None) -> None:
-        if not self.is_suspend:
+    async def resume_async(
+        self, data_parallel_master_ip: str | None = None, model_path=None
+    ) -> None:
+        if not self._snapshot_is_suspend_done():
             logger.warning("[snapshot] api server is not suspend.")
             return
-        if self.is_resume:
-            logger.warning("[snapshot] api server is resuming now.")
+        if not self._snapshot_try_start_resuming():
+            logger.warning("[snapshot] api server is resuming or already resumed.")
             return
         if not is_restore():
-            logger.warning("[snapshot] api server resume fail, not find /root/.grusflag")
+            self._snapshot_mark_resume_failed()
+            logger.warning(
+                "[snapshot] api server resume fail, not find /root/.grusflag"
+            )
             return
         time_before_resume = time.perf_counter()
-        self.is_resume = True
 
-        assert data_parallel_master_ip is not None
-        logger.info(f"[snapshot] api server wait_for_engines_ready")
-        task = asyncio.create_task(self.wait_for_engines_ready())
-        if self._snapshot_transport_reconnect:
-            await task
-            await self.call_utility_async("resume", data_parallel_master_ip, model_path)
-        else:
-            await self.call_utility_async("resume", data_parallel_master_ip, model_path)
-            await task
-        self.is_suspend = False
-        self.is_resume = False
+        try:
+            assert data_parallel_master_ip is not None
+            logger.info("[snapshot] api server wait_for_engines_ready")
+            task = asyncio.create_task(self.wait_for_engines_ready())
+            if self._snapshot_transport_reconnect:
+                # In centralized DP, restored EngineCores must reconnect their
+                # TCP transport before the resume utility call can reach them.
+                await task
+                await self.call_utility_async(
+                    "resume", data_parallel_master_ip, model_path
+                )
+            else:
+                # Distributed DP keeps its IPC transport across restore.
+                await self.call_utility_async(
+                    "resume", data_parallel_master_ip, model_path
+                )
+                await task
+        except BaseException:
+            self._snapshot_mark_resume_failed()
+            raise
+        self._snapshot_mark_resume_done()
         time_after_resume = time.perf_counter()
         logger.info(
-            "It took %.6f seconds to resume.", time_after_resume - time_before_resume,
+            "It took %.6f seconds to resume.",
+            time_after_resume - time_before_resume,
         )
 
     async def is_sleeping_async(self) -> bool:
@@ -1399,9 +1524,7 @@ class DPAsyncMPClient(AsyncMPClient):
                                         )
                                     ]
                                 else:
-                                    self.lb_engines = self.lb_engines[
-                                        :new_engine_count
-                                    ]
+                                    self.lb_engines = self.lb_engines[:new_engine_count]
                                 # Send scale up notification to coordinator
                                 scale_msg = msgspec.msgpack.encode(
                                     ("SCALE_ELASTIC_EP", new_engine_count)
@@ -1477,54 +1600,76 @@ class DPAsyncMPClient(AsyncMPClient):
     def get_core_engine_for_request(self, request: EngineCoreRequest):
         return self.core_engine
 
-    async def resume_async(self, data_parallel_master_ip:str|None = None, model_path=None) -> None:
-        if not self.is_suspend:
+    async def resume_async(
+        self, data_parallel_master_ip: str | None = None, model_path=None
+    ) -> None:
+        if not self._snapshot_is_suspend_done():
             logger.warning("[snapshot] api server is not suspend.")
             return
-        if self.is_resume:
-            logger.warning("[snapshot] api server is resuming now.")
+        if not self._snapshot_try_start_resuming():
+            logger.warning("[snapshot] api server is resuming or already resumed.")
             return
         if not is_restore():
-            logger.warning("[snapshot] api server resume fail, not find /root/.grusflag")
+            self._snapshot_mark_resume_failed()
+            logger.warning(
+                "[snapshot] api server resume fail, not find /root/.grusflag"
+            )
             return
 
         time_before_resume = time.perf_counter()
-        self.is_resume = True
-        assert data_parallel_master_ip is not None
-        # refresh the connection to the DP coordinator
-        if not self.resources.stats_update_task.done():
-            self.resources.stats_update_task.cancel()
-            try:
-                await self.resources.stats_update_task
-            except asyncio.CancelledError:
-                logger.info("[snapshot] api server stats_update_task cancelled successfully")
-        self.resources.stats_update_task = None
-        self.stats_update_address = re.sub(r"\d+\.\d+\.\d+\.\d+", data_parallel_master_ip, self.stats_update_address)
-        self.first_req_sock_addr = get_open_zmq_inproc_path()
-        self.first_req_send_socket = self.resources.first_req_send_socket = (
-            make_zmq_socket(self.ctx, self.first_req_sock_addr, zmq.PAIR, bind=True)
-        )
         try:
-            asyncio.get_running_loop()
-            self._ensure_stats_update_task()
-        except RuntimeError:
-            logger.error(f"[snapshot] api server resume_async start stats_update_task failed")
-            raise
+            assert data_parallel_master_ip is not None
+            # refresh the connection to the DP coordinator
+            if not self.resources.stats_update_task.done():
+                self.resources.stats_update_task.cancel()
+                try:
+                    await self.resources.stats_update_task
+                except asyncio.CancelledError:
+                    logger.info(
+                        "[snapshot] api server stats_update_task cancelled successfully"
+                    )
+            self.resources.stats_update_task = None
+            self.stats_update_address = re.sub(
+                r"\d+\.\d+\.\d+\.\d+",
+                data_parallel_master_ip,
+                self.stats_update_address,
+            )
+            self.first_req_sock_addr = get_open_zmq_inproc_path()
+            self.first_req_send_socket = self.resources.first_req_send_socket = (
+                make_zmq_socket(self.ctx, self.first_req_sock_addr, zmq.PAIR, bind=True)
+            )
+            try:
+                asyncio.get_running_loop()
+                self._ensure_stats_update_task()
+            except RuntimeError:
+                logger.error(
+                    "[snapshot] api server resume_async start stats_update_task failed"
+                )
+                raise
 
-        # Wait for engines send READY message to client
-        logger.info(f"[snapshot] api server wait_for_engines_ready")
-        task = asyncio.create_task(self.wait_for_engines_ready())
-        if self._snapshot_transport_reconnect:
-            await task
-            await self.call_utility_async("resume", data_parallel_master_ip, model_path)
-        else:
-            await self.call_utility_async("resume", data_parallel_master_ip, model_path)
-            await task
-        self.is_suspend = False
-        self.is_resume = False
+            # Wait for engines send READY message to client
+            logger.info("[snapshot] api server wait_for_engines_ready")
+            task = asyncio.create_task(self.wait_for_engines_ready())
+            if self._snapshot_transport_reconnect:
+                # Centralized DP restores the TCP transport before dispatching
+                # the resume utility request; distributed DP retains its IPC.
+                await task
+                await self.call_utility_async(
+                    "resume", data_parallel_master_ip, model_path
+                )
+            else:
+                await self.call_utility_async(
+                    "resume", data_parallel_master_ip, model_path
+                )
+                await task
+        except BaseException:
+            self._snapshot_mark_resume_failed()
+            raise
+        self._snapshot_mark_resume_done()
         time_after_resume = time.perf_counter()
         logger.info(
-            "It took %.6f seconds to resume.", time_after_resume - time_before_resume,
+            "It took %.6f seconds to resume.",
+            time_after_resume - time_before_resume,
         )
 
 

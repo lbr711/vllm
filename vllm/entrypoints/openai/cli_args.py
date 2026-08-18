@@ -21,6 +21,7 @@ from vllm.entrypoints.chat_utils import (
     validate_chat_template,
 )
 from vllm.entrypoints.openai.models.protocol import LoRAModulePath
+from vllm.entrypoints.serve.snapshot.config import SnapshotConfig
 from vllm.entrypoints.serve.utils.constants import (
     H11_MAX_HEADER_COUNT_DEFAULT,
     H11_MAX_INCOMPLETE_EVENT_SIZE_DEFAULT,
@@ -229,8 +230,8 @@ class FrontendArgs(BaseFrontendArgs):
     """Host name."""
     port: int = 8000
     """Port number."""
-    snapshot_metadata: str | None = None
-    """Snapshot metadata file. Enables the snapshot sentinel when provided."""
+    snapshot_config: SnapshotConfig = field(default_factory=SnapshotConfig)
+    """Container snapshot configuration."""
     data_parallel_supervisor_port: int = 9256
     """HTTP port for aggregated health endpoints in multi-port external LB
     mode."""

@@ -7,7 +7,6 @@ import requests
 
 from vllm.logger import init_logger
 
-from .monitor import SnapshotMonitor
 from .utils import is_restored_from_host_side_snapshot, load_snapshot_metadata
 
 logger = init_logger(__name__)
@@ -30,7 +29,6 @@ class SnapshotSentinel(threading.Thread):
         port: int,
         use_tls: bool,
         ca_file: str | None,
-        monitor: SnapshotMonitor,
     ) -> None:
         super().__init__(name="snapshot-sentinel", daemon=True)
         if host in (None, "0.0.0.0"):
@@ -44,7 +42,6 @@ class SnapshotSentinel(threading.Thread):
         self._base_url = f"{scheme}://{formatted_host}:{port}"
         self._verify = ca_file if use_tls and ca_file else True
         self._snapshot_metadata = snapshot_metadata
-        self._monitor = monitor
         self._stop_event = threading.Event()
 
     def stop(self) -> None:
@@ -116,7 +113,6 @@ class SnapshotSentinel(threading.Thread):
                     "[snapshot] Suspend completed, model_save_path=%r",
                     model_save_path,
                 )
-                self._monitor.mark_suspend_done()
                 return
             except Exception as exc:
                 if retries % RETRY_LOG_FREQUENCY == 0:
@@ -147,7 +143,6 @@ class SnapshotSentinel(threading.Thread):
                     "[snapshot] Checkpoint completed, device unlocked; stopping "
                     "snapshot sentinel"
                 )
-                self._monitor.mark_unlock_done()
                 self._stop_event.set()
                 return
             except Exception as exc:
@@ -185,7 +180,6 @@ class SnapshotSentinel(threading.Thread):
                     model_load_path,
                     data_parallel_master_ip,
                 )
-                self._monitor.mark_resume_done()
                 return
             except Exception as exc:
                 if retries % RETRY_LOG_FREQUENCY == 0:
