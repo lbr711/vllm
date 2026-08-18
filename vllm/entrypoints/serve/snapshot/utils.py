@@ -3,14 +3,25 @@
 
 import json
 import os
+import socket
 
 RESTORED_FLAG_PATH = "/root/.grusflag"
 RETRY_INTERVAL = 1.0
 RETRY_LOG_FREQUENCY = 60
 
 
-def is_restored_from_host_side_snapshot() -> bool:
+def is_restore() -> bool:
     return os.path.exists(RESTORED_FLAG_PATH)
+
+
+def get_local_ip() -> str:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.settimeout(0.1)
+        sock.connect(("8.8.8.8", 80))
+        return sock.getsockname()[0]
+    finally:
+        sock.close()
 
 
 def load_snapshot_metadata(file_path: str, field_name: str) -> str:

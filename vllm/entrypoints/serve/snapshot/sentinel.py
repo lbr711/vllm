@@ -10,7 +10,8 @@ from vllm.logger import init_logger
 from .utils import (
     RETRY_INTERVAL,
     RETRY_LOG_FREQUENCY,
-    is_restored_from_host_side_snapshot,
+    get_local_ip,
+    is_restore,
     load_snapshot_metadata,
 )
 
@@ -28,21 +29,13 @@ class SnapshotSentinel(threading.Thread):
     def __init__(
         self,
         snapshot_metadata: str,
-        host: str | None,
         port: int,
         use_tls: bool,
         ca_file: str | None,
     ) -> None:
         super().__init__(name="snapshot-sentinel", daemon=True)
-        if host in (None, "0.0.0.0"):
-            host = "127.0.0.1"
-        elif host == "::":
-            host = "::1"
-        formatted_host = (
-            host if host.startswith("[") else f"[{host}]" if ":" in host else host
-        )
-        scheme = "https" if use_tls else "http"
-        self._base_url = f"{scheme}://{formatted_host}:{port}"
+        self._port = port
+        self._scheme = "https" if use_tls else "http"
         self._verify = ca_file if use_tls and ca_file else True
         self._snapshot_metadata = snapshot_metadata
         self._stop_event = threading.Event()
@@ -72,11 +65,13 @@ class SnapshotSentinel(threading.Thread):
         method: str,
         path: str,
         timeout: float,
+        host: str,
         params: dict[str, str] | None = None,
     ) -> None:
+        formatted_host = f"[{host}]" if ":" in host else host
         response = requests.request(
             method,
-            f"{self._base_url}/{path.lstrip('/')}",
+            f"{self._scheme}://{formatted_host}:{self._port}/{path.lstrip('/')}",
             params=params,
             timeout=timeout,
             verify=self._verify,
@@ -85,9 +80,10 @@ class SnapshotSentinel(threading.Thread):
 
     def _wait_until_infer_healthy(self) -> None:
         retries = 0
+        host = get_local_ip()
         while not self._stop_event.is_set():
             try:
-                self._request("GET", "/health", HEALTH_TIMEOUT)
+                self._request("GET", "/health", HEALTH_TIMEOUT, host)
                 return
             except Exception as exc:
                 if retries % RETRY_LOG_FREQUENCY == 0:
@@ -100,6 +96,7 @@ class SnapshotSentinel(threading.Thread):
 
     def _call_suspend(self) -> None:
         retries = 0
+        host = get_local_ip()
         while not self._stop_event.is_set():
             model_save_path = None
             try:
@@ -110,6 +107,7 @@ class SnapshotSentinel(threading.Thread):
                     "POST",
                     "/suspend",
                     SUSPEND_TIMEOUT,
+                    host,
                     {"model_save_path": model_save_path},
                 )
                 logger.info(
@@ -131,9 +129,8 @@ class SnapshotSentinel(threading.Thread):
 
     def _reach_checkpoint(self) -> None:
         retries = 0
-        while (
-            not self._stop_event.is_set() and not is_restored_from_host_side_snapshot()
-        ):
+        host = get_local_ip()
+        while not self._stop_event.is_set() and not is_restore():
             try:
                 checkpoint = load_snapshot_metadata(
                     self._snapshot_metadata, "checkpoint"
@@ -141,7 +138,9 @@ class SnapshotSentinel(threading.Thread):
                 if checkpoint != "done":
                     raise ValueError("Container checkpoint is not done")
 
-                self._request("POST", "/device_unlock", DEVICE_UNLOCK_TIMEOUT)
+                self._request(
+                    "POST", "/device_unlock", DEVICE_UNLOCK_TIMEOUT, host
+                )
                 logger.info(
                     "[snapshot] Checkpoint completed, device unlocked; stopping "
                     "snapshot sentinel"
@@ -158,6 +157,9 @@ class SnapshotSentinel(threading.Thread):
 
     def _call_resume(self) -> None:
         retries = 0
+        # Resume runs after restore, so resolve the new Pod IP once and reuse
+        # it for all request retries.
+        host = get_local_ip()
         while not self._stop_event.is_set():
             model_load_path = None
             data_parallel_master_ip = None
@@ -172,6 +174,7 @@ class SnapshotSentinel(threading.Thread):
                     "POST",
                     "/resume",
                     RESUME_TIMEOUT,
+                    host,
                     {
                         "model_path": model_load_path,
                         "data_parallel_master_ip": data_parallel_master_ip,

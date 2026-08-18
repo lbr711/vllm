@@ -481,7 +481,6 @@ async def lifespan(app: FastAPI):
             if app.state.args._snapshot_sentinel_leader:
                 snapshot_sentinel = SnapshotSentinel(
                     snapshot_metadata=snapshot_config.snapshot_metadata,
-                    host=app.state.args.host,
                     port=app.state.args.port,
                     use_tls=bool(
                         app.state.args.ssl_keyfile and app.state.args.ssl_certfile

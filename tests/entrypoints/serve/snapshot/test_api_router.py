@@ -224,7 +224,7 @@ async def test_snapshot_health_waits_for_suspend_on_cold_start():
 
     with patch(
         "vllm.entrypoints.serve.snapshot.api_router."
-        "is_restored_from_host_side_snapshot",
+        "is_restore",
         return_value=False,
     ):
         response = await snapshot_health(request)
@@ -243,7 +243,7 @@ async def test_snapshot_health_waits_for_resume_after_restore():
 
     with patch(
         "vllm.entrypoints.serve.snapshot.api_router."
-        "is_restored_from_host_side_snapshot",
+        "is_restore",
         return_value=True,
     ):
         response = await snapshot_health(request)

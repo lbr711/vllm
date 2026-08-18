@@ -10,7 +10,7 @@ from vllm.engine.protocol import EngineClient
 from vllm.v1.engine.exceptions import EngineDeadError
 
 from .monitor import SnapshotMonitor
-from .utils import is_restored_from_host_side_snapshot
+from .utils import is_restore
 
 router = APIRouter()
 
@@ -56,7 +56,7 @@ async def snapshot_health(raw_request: Request) -> Response:
     monitor = snapshot_monitor(raw_request)
     ready = (
         monitor.is_resume_done
-        if is_restored_from_host_side_snapshot()
+        if is_restore()
         else monitor.is_suspend_done
     )
     status_code = HTTPStatus.OK if ready else HTTPStatus.ACCEPTED
