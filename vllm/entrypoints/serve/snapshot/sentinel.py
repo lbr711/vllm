@@ -7,7 +7,12 @@ import requests
 
 from vllm.logger import init_logger
 
-from .utils import is_restored_from_host_side_snapshot, load_snapshot_metadata
+from .utils import (
+    RETRY_INTERVAL,
+    RETRY_LOG_FREQUENCY,
+    is_restored_from_host_side_snapshot,
+    load_snapshot_metadata,
+)
 
 logger = init_logger(__name__)
 
@@ -15,8 +20,6 @@ SUSPEND_TIMEOUT = 3600.0
 RESUME_TIMEOUT = 3600.0
 DEVICE_UNLOCK_TIMEOUT = 10.0
 HEALTH_TIMEOUT = 5.0
-RETRY_INTERVAL = 1.0
-RETRY_LOG_FREQUENCY = 60
 
 
 class SnapshotSentinel(threading.Thread):

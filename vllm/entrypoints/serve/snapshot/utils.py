@@ -5,6 +5,8 @@ import json
 import os
 
 RESTORED_FLAG_PATH = "/root/.grusflag"
+RETRY_INTERVAL = 1.0
+RETRY_LOG_FREQUENCY = 60
 
 
 def is_restored_from_host_side_snapshot() -> bool:

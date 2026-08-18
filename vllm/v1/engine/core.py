@@ -1106,14 +1106,39 @@ class EngineCoreProc(EngineCore):
 
     def _restore_transport_from_metadata(self, snapshot_metadata: str) -> None:
         try:
-            while not is_restore():
-                time.sleep(1)
-
-            from vllm.entrypoints.serve.snapshot.utils import load_snapshot_metadata
-
-            data_parallel_master_ip = load_snapshot_metadata(
-                snapshot_metadata, "data_parallel_master_ip"
+            from vllm.entrypoints.serve.snapshot.utils import (
+                RETRY_INTERVAL,
+                RETRY_LOG_FREQUENCY,
+                load_snapshot_metadata,
             )
+
+            while not is_restore():
+                time.sleep(RETRY_INTERVAL)
+
+            # The restore marker may appear before the controller writes the
+            # new master Pod IP. Keep reading metadata until that field is
+            # available; transport reconstruction failures remain fatal.
+            attempts = 0
+            while True:
+                try:
+                    data_parallel_master_ip = load_snapshot_metadata(
+                        snapshot_metadata, "data_parallel_master_ip"
+                    )
+                    break
+                except Exception as exc:
+                    attempts += 1
+                    if (
+                        attempts == 1
+                        or attempts % RETRY_LOG_FREQUENCY == 0
+                    ):
+                        logger.warning(
+                            "[snapshot] data_parallel_master_ip is not ready "
+                            "after restore, will retry (attempt %d): %s",
+                            attempts,
+                            exc,
+                        )
+                    time.sleep(RETRY_INTERVAL)
+
             with self._transport_lock:
                 self._reconnect_transport(data_parallel_master_ip)
                 self._transport_restored = True
