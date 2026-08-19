@@ -3,7 +3,6 @@
 import gc
 import os
 import queue
-import re
 import signal
 import threading
 import time
@@ -17,7 +16,6 @@ from inspect import isclass, signature
 from logging import DEBUG
 from multiprocessing.queues import Queue
 from typing import Any, TypeVar, cast
-from uuid import uuid4
 
 import msgspec
 import zmq
@@ -33,6 +31,10 @@ from vllm.logger import init_logger
 from vllm.logging_utils.dump_input import dump_engine_exception
 from vllm.lora.request import LoRARequest
 from vllm.multimodal import MULTIMODAL_REGISTRY
+from vllm.snapshot.kv_transfer import (
+    refresh_scheduler_after_resume,
+    refresh_scheduler_handshake_metadata_after_resume,
+)
 from vllm.snapshot.utils import get_local_ip, is_restore
 from vllm.tasks import POOLING_TASKS, SupportedTask
 from vllm.tracing import instrument, maybe_init_worker_tracer
@@ -863,81 +865,6 @@ class EngineShutdownState(IntEnum):
     RUNNING = 0
     REQUESTED = 1
     SHUTTING_DOWN = 2
-
-
-def _rotate_snapshot_engine_id(engine_id: str) -> str:
-    """Replace the process-level uuid in runtime engine_id, keep instance_id prefix."""
-    match = re.match(r"^(.+)-([0-9a-f]{32})(_dp\d+)?$", engine_id)
-    if match is None:
-        logger.warning(
-            "[snapshot][rebuild] engine_id %s does not match expected format, "
-            "append new uuid suffix",
-            engine_id,
-        )
-        return f"{engine_id}-{uuid4().hex}"
-    prefix = match.group(1)
-    dp_suffix = match.group(3) or ""
-    return f"{prefix}-{uuid4().hex}{dp_suffix}"
-
-
-def _refresh_scheduler_after_resume(engine_core: "EngineCoreProc", local_ip: str) -> None:
-    """[snapshot] Refresh scheduler side_channel_host and rotate engine_id (P/D)."""
-    kv_cfg = getattr(getattr(engine_core, "vllm_config", None), "kv_transfer_config", None)
-    if kv_cfg is None:
-        return
-    if not (
-        getattr(kv_cfg, "is_kv_producer", False) or getattr(kv_cfg, "is_kv_consumer", False)
-    ):
-        return
-
-    connector = getattr(getattr(engine_core, "scheduler", None), "connector", None)
-    cs = getattr(connector, "connector_scheduler", None) if connector else None
-    if cs is None:
-        return
-
-    if hasattr(cs, "side_channel_host"):
-        old_host = cs.side_channel_host
-        cs.side_channel_host = local_ip
-        logger.info(
-            "[snapshot][rebuild] scheduler side_channel_host %s->%s", old_host, local_ip
-        )
-
-    if hasattr(cs, "engine_id"):
-        old_id = str(cs.engine_id)
-        new_id = _rotate_snapshot_engine_id(old_id)
-        cs.engine_id = new_id
-        if connector is not None and hasattr(connector, "engine_id"):
-            connector.engine_id = new_id
-        kv_cfg.engine_id = new_id
-        logger.info("[snapshot][rebuild] scheduler engine_id %s->%s", old_id, new_id)
-
-
-def _refresh_scheduler_handshake_metadata_after_resume(
-    engine_core: "EngineCoreProc",
-) -> None:
-    """Refresh scheduler per-rank KV endpoint mappings after worker rebuild."""
-    kv_cfg = getattr(getattr(engine_core, "vllm_config", None), "kv_transfer_config", None)
-    if kv_cfg is None or not getattr(kv_cfg, "is_kv_producer", False):
-        return
-    connector_name = getattr(kv_cfg, "kv_connector", "") or ""
-    if "Layerwise" in connector_name:
-        return
-
-    kv_connector = engine_core.scheduler.get_kv_connector()
-    if kv_connector is None:
-        return
-
-    xfer_handshake_metadata = (
-        engine_core.model_executor.get_kv_connector_handshake_metadata()
-    )
-    if not xfer_handshake_metadata:
-        return
-
-    content: dict[tuple[int, int], Any] = {}
-    for worker_dict in xfer_handshake_metadata:
-        if worker_dict is not None:
-            content.update(worker_dict)
-    kv_connector.set_xfer_handshake_metadata_pp_aware(content)
 
 
 class EngineCoreProc(EngineCore):
@@ -1979,7 +1906,7 @@ class EngineCoreProc(EngineCore):
         # Refresh scheduler-side KV state before worker rebuild so the rotated
         # engine_id is available when rebinding KV transfer endpoints.
         logger.info(f"[snapshot] [engine] " + "-" * 20 + "snapshot_refresh_scheduler_after_resume" + "-" * 20)
-        _refresh_scheduler_after_resume(self, local_ip)
+        refresh_scheduler_after_resume(self, local_ip)
 
         kv_cfg = self.vllm_config.kv_transfer_config
         new_engine_id = str(kv_cfg.engine_id) if kv_cfg is not None else None
@@ -1991,7 +1918,7 @@ class EngineCoreProc(EngineCore):
         # Re-collect rebuilt worker metadata so scheduler-side per-rank endpoint
         # mappings do not keep pre-snapshot addresses.
         logger.info(f"[snapshot] [engine] " + "-" * 20 + "refresh_scheduler_handshake_metadata_after_resume" + "-" * 20)
-        _refresh_scheduler_handshake_metadata_after_resume(self)
+        refresh_scheduler_handshake_metadata_after_resume(self)
 
 
 class DPEngineCoreProc(EngineCoreProc):
