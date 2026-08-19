@@ -35,7 +35,7 @@ from vllm.snapshot.kv_transfer import (
     refresh_scheduler_after_resume,
     refresh_scheduler_handshake_metadata_after_resume,
 )
-from vllm.snapshot.utils import is_restore
+from vllm.snapshot.utils import get_local_ip, is_restore
 from vllm.tasks import POOLING_TASKS, SupportedTask
 from vllm.tracing import instrument, maybe_init_worker_tracer
 from vllm.transformers_utils.config import maybe_register_config_serialize_by_value
@@ -46,7 +46,6 @@ from vllm.utils.gc_utils import (
 )
 from vllm.utils.hashing import get_hash_fn_by_name
 from vllm.utils.network_utils import (
-    get_ip,
     make_zmq_socket,
     replace_zmq_tcp_host,
     split_zmq_path,
@@ -1872,7 +1871,7 @@ class EngineCoreProc(EngineCore):
                 self._reconnect_transport(data_parallel_master_ip)
                 self._transport_restored = True
 
-        local_ip = get_ip()
+        local_ip = get_local_ip()
         parallel_config = self.vllm_config.parallel_config
         parallel_config.data_parallel_master_ip = data_parallel_master_ip
         kv_config = self.vllm_config.kv_transfer_config

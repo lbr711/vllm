@@ -3,10 +3,27 @@
 
 import json
 import os
+import socket
 
 RESTORED_FLAG_PATH = "/root/.grusflag"
 RETRY_INTERVAL = 1.0
 RETRY_LOG_FREQUENCY = 60
+
+
+def get_local_ip() -> str:
+    """Probe the current local IP without using a cached environment value."""
+    targets = (
+        (socket.AF_INET, ("8.8.8.8", 80)),
+        (socket.AF_INET6, ("2001:4860:4860::8888", 80)),
+    )
+    for family, target in targets:
+        try:
+            with socket.socket(family, socket.SOCK_DGRAM) as sock:
+                sock.connect(target)
+                return sock.getsockname()[0]
+        except OSError:
+            continue
+    raise RuntimeError("Failed to detect the current local IP address")
 
 
 def is_restore() -> bool:

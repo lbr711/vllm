@@ -9,10 +9,10 @@ from vllm.logger import init_logger
 from vllm.snapshot.utils import (
     RETRY_INTERVAL,
     RETRY_LOG_FREQUENCY,
+    get_local_ip,
     is_restore,
     load_snapshot_metadata,
 )
-from vllm.utils.network_utils import get_ip
 
 logger = init_logger(__name__)
 
@@ -79,7 +79,7 @@ class SnapshotSentinel(threading.Thread):
 
     def _wait_until_infer_healthy(self) -> None:
         retries = 0
-        host = get_ip()
+        host = get_local_ip()
         while not self._stop_event.is_set():
             try:
                 self._request("GET", "/health", HEALTH_TIMEOUT, host)
@@ -95,7 +95,7 @@ class SnapshotSentinel(threading.Thread):
 
     def _call_suspend(self) -> None:
         retries = 0
-        host = get_ip()
+        host = get_local_ip()
         while not self._stop_event.is_set():
             model_save_path = None
             try:
@@ -128,7 +128,7 @@ class SnapshotSentinel(threading.Thread):
 
     def _reach_checkpoint(self) -> None:
         retries = 0
-        host = get_ip()
+        host = get_local_ip()
         while not self._stop_event.is_set() and not is_restore():
             try:
                 checkpoint = load_snapshot_metadata(
@@ -158,7 +158,7 @@ class SnapshotSentinel(threading.Thread):
         retries = 0
         # Resume runs after restore, so resolve the new Pod IP once and reuse
         # it for all request retries.
-        host = get_ip()
+        host = get_local_ip()
         while not self._stop_event.is_set():
             model_load_path = None
             data_parallel_master_ip = None
