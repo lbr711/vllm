@@ -116,7 +116,6 @@ class EngineCoreClient(ABC):
         client_addresses: dict[str, Any] | None = None,
         client_count: int = 1,
         client_index: int = 0,
-        snapshot_metadata: str | None = None,
     ) -> "AsyncMPClient":
         parallel_config = vllm_config.parallel_config
         client_args = (
@@ -126,7 +125,6 @@ class EngineCoreClient(ABC):
             client_addresses,
             client_count,
             client_index,
-            snapshot_metadata,
         )
         if parallel_config.data_parallel_size > 1:
             if parallel_config.data_parallel_external_lb:
@@ -500,7 +498,6 @@ class MPClient(EngineCoreClient):
         executor_class: type[Executor],
         log_stats: bool,
         client_addresses: dict[str, Any] | None = None,
-        snapshot_metadata: str | None = None,
     ):
         self.vllm_config = vllm_config
 
@@ -601,7 +598,6 @@ class MPClient(EngineCoreClient):
                     executor_class,
                     log_stats,
                     addresses,
-                    snapshot_metadata=snapshot_metadata,
                 ) as (engine_manager, coordinator, addresses, tensor_queue):
                     self.resources.coordinator = coordinator
                     self.resources.engine_manager = engine_manager
@@ -1064,7 +1060,6 @@ class AsyncMPClient(MPClient):
         client_addresses: dict[str, Any] | None = None,
         client_count: int = 1,
         client_index: int = 0,
-        snapshot_metadata: str | None = None,
     ):
         super().__init__(
             asyncio_mode=True,
@@ -1072,7 +1067,6 @@ class AsyncMPClient(MPClient):
             executor_class=executor_class,
             log_stats=log_stats,
             client_addresses=client_addresses,
-            snapshot_metadata=snapshot_metadata,
         )
 
         # Lifecycle guards for suspend/resume re-entrancy.
@@ -1427,7 +1421,6 @@ class DPAsyncMPClient(AsyncMPClient):
         client_addresses: dict[str, Any] | None = None,
         client_count: int = 1,
         client_index: int = 0,
-        snapshot_metadata: str | None = None,
     ):
         self.current_wave = 0
 
@@ -1438,7 +1431,6 @@ class DPAsyncMPClient(AsyncMPClient):
             client_addresses,
             client_count,
             client_index,
-            snapshot_metadata,
         )
 
         # List of [waiting, running] pair per engine.
@@ -1691,7 +1683,6 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
         client_addresses: dict[str, Any] | None = None,
         client_count: int = 1,
         client_index: int = 0,
-        snapshot_metadata: str | None = None,
     ):
         self.client_count = client_count
 
@@ -1705,7 +1696,6 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
             client_addresses,
             client_count,
             client_index,
-            snapshot_metadata,
         )
 
         assert len(self.core_engines) > 1

@@ -885,7 +885,6 @@ class EngineCoreProc(EngineCore):
         log_stats: bool,
         client_handshake_address: str | None = None,
         tensor_queue: Queue | None = None,
-        snapshot_metadata: str | None = None,
         *,
         engine_index: int = 0,
     ):
@@ -953,6 +952,7 @@ class EngineCoreProc(EngineCore):
 
             self._start_io_threads()
 
+        snapshot_metadata = vllm_config.snapshot_config.snapshot_metadata
         if snapshot_metadata is not None and any(
             split_zmq_path(address)[0] == "tcp" for address in self.addresses.inputs
         ):
@@ -1869,7 +1869,6 @@ class DPEngineCoreProc(EngineCoreProc):
         log_stats: bool,
         client_handshake_address: str | None = None,
         tensor_queue: Queue | None = None,
-        snapshot_metadata: str | None = None,
     ):
         assert vllm_config.model_config.is_moe, (
             "DPEngineCoreProc should only be used for MoE models"
@@ -1904,7 +1903,6 @@ class DPEngineCoreProc(EngineCoreProc):
             client_handshake_address,
             engine_index=dp_rank,
             tensor_queue=tensor_queue,
-            snapshot_metadata=snapshot_metadata,
         )
 
     def _init_data_parallel(self, vllm_config: VllmConfig):

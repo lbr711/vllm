@@ -84,7 +84,6 @@ class AsyncLLM(EngineClient):
         client_addresses: dict[str, Any] | None = None,
         client_count: int = 1,
         client_index: int = 0,
-        snapshot_metadata: str | None = None,
     ) -> None:
         """
         Create an AsyncLLM.
@@ -151,7 +150,6 @@ class AsyncLLM(EngineClient):
             client_addresses=client_addresses,
             client_count=client_count,
             client_index=client_index,
-            snapshot_metadata=snapshot_metadata,
         )
 
         # Loggers.
@@ -214,7 +212,6 @@ class AsyncLLM(EngineClient):
         client_addresses: dict[str, Any] | None = None,
         client_count: int = 1,
         client_index: int = 0,
-        snapshot_metadata: str | None = None,
     ) -> "AsyncLLM":
         # Create the LLMEngine.
         return cls(
@@ -229,7 +226,6 @@ class AsyncLLM(EngineClient):
             client_addresses=client_addresses,
             client_count=client_count,
             client_index=client_index,
-            snapshot_metadata=snapshot_metadata,
         )
 
     @classmethod
