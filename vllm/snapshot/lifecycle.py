@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import gc
-import os
 from collections.abc import Callable
 from typing import Any, Protocol, TypeVar
 
@@ -48,16 +47,16 @@ def suspend_engine(
     logger.info("[snapshot] [engine] gc.collect()")
     gc.collect()
 
-    logger.info("[snapshot] [engine] aclrt_snapshot_process_lock")
-    engine_core.collective_rpc("aclrt_snapshot_process_lock")
+    logger.info("[snapshot] [engine] snapshot_process_lock")
+    engine_core.collective_rpc("snapshot_process_lock")
 
-    logger.info("[snapshot] [engine] aclrt_snapshot_process_backup")
-    engine_core.collective_rpc("aclrt_snapshot_process_backup")
+    logger.info("[snapshot] [engine] snapshot_process_backup")
+    engine_core.collective_rpc("snapshot_process_backup")
 
 
 def unlock_engine(engine_core: SnapshotEngine) -> None:
-    logger.info("[snapshot] [engine] aclrt_snapshot_process_unlock")
-    engine_core.collective_rpc("aclrt_snapshot_process_unlock")
+    logger.info("[snapshot] [engine] snapshot_process_unlock")
+    engine_core.collective_rpc("snapshot_process_unlock")
 
 
 def resume_engine(
@@ -69,15 +68,14 @@ def resume_engine(
         if not engine_core._transport_restored:
             engine_core._reconnect_transport(data_parallel_master_ip)
 
-    logger.info("[snapshot] [engine] aclrt_snapshot_process_restore")
-    engine_core.collective_rpc("aclrt_snapshot_process_restore")
+    logger.info("[snapshot] [engine] snapshot_process_restore")
+    engine_core.collective_rpc("snapshot_process_restore")
 
-    logger.info("[snapshot] [engine] aclrt_snapshot_process_unlock")
-    engine_core.collective_rpc("aclrt_snapshot_process_unlock")
+    logger.info("[snapshot] [engine] snapshot_process_unlock")
+    engine_core.collective_rpc("snapshot_process_unlock")
 
     logger.info("[snapshot] [engine] update_worker_info_after_resume")
     local_ip = get_local_ip()
-    os.environ["HCCL_IF_IP"] = local_ip
     parallel_config = engine_core.vllm_config.parallel_config
     parallel_config.data_parallel_master_ip = data_parallel_master_ip
     engine_core.collective_rpc(

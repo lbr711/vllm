@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-import os
 from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
@@ -39,9 +38,9 @@ def test_suspend_and_unlock_preserve_collective_rpc_order():
     collect.assert_called_once_with()
     assert engine.collective_rpc.call_args_list == [
         call("dump_model", args=("/snapshot/model",)),
-        call("aclrt_snapshot_process_lock"),
-        call("aclrt_snapshot_process_backup"),
-        call("aclrt_snapshot_process_unlock"),
+        call("snapshot_process_lock"),
+        call("snapshot_process_backup"),
+        call("snapshot_process_unlock"),
     ]
 
 
@@ -54,14 +53,13 @@ def test_resume_reconnects_transport_before_worker_restore():
         patch(
             "vllm.snapshot.lifecycle.refresh_scheduler_handshake_metadata_after_resume"
         ) as refresh_metadata,
-        patch.dict(os.environ, {}, clear=True),
     ):
         resume_engine(engine, "10.0.0.3", "/snapshot/model")
 
         assert engine.vllm_config.parallel_config.data_parallel_master_ip == "10.0.0.3"
         assert engine.collective_rpc.call_args_list == [
-            call("aclrt_snapshot_process_restore"),
-            call("aclrt_snapshot_process_unlock"),
+            call("snapshot_process_restore"),
+            call("snapshot_process_unlock"),
             call(
                 "update_worker_info_after_resume",
                 args=("10.0.0.2", "10.0.0.3"),
@@ -74,8 +72,6 @@ def test_resume_reconnects_transport_before_worker_restore():
                 args=("10.0.0.2", None),
             ),
         ]
-        assert os.environ["HCCL_IF_IP"] == "10.0.0.2"
-
     engine._reconnect_transport.assert_called_once_with("10.0.0.3")
     refresh.assert_called_once_with(engine, "10.0.0.2")
     refresh_metadata.assert_called_once_with(engine)

@@ -2118,13 +2118,6 @@ def cleanup_dist_env_and_memory(shutdown_ray: bool = False):
     logger.debug_once("[shutdown] Distributed: cleanup complete")
 
 
-def cleanup_dist_env_for_snapshot(shutdown_ray: bool = False) -> None:
-    """Compatibility wrapper for snapshot-specific distributed cleanup."""
-    from vllm.snapshot.distributed import cleanup_dist_env_for_snapshot as cleanup
-
-    cleanup(shutdown_ray)
-
-
 def in_the_same_node_as(
     pg: ProcessGroup | StatelessProcessGroup, source_rank: int = 0
 ) -> list[bool]:

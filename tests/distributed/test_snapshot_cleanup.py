@@ -4,7 +4,6 @@
 from unittest.mock import Mock, patch
 
 from vllm.distributed.parallel_state import GroupCoordinator
-from vllm.snapshot.distributed import cleanup_dist_env_for_snapshot
 
 
 def _group_coordinator(device_group: Mock) -> GroupCoordinator:
@@ -33,18 +32,3 @@ def test_group_coordinator_accepts_snapshot_process_group_destroyer():
     coordinator.destroy(destroy)
 
     destroy.assert_called_once_with(device_group)
-
-
-def test_snapshot_cleanup_uses_hccl_abort_destroyer():
-    with (
-        patch("vllm.snapshot.distributed.destroy_model_parallel") as destroy_model,
-        patch(
-            "vllm.snapshot.distributed.destroy_distributed_environment"
-        ) as destroy_world,
-        patch("vllm.snapshot.distributed.reset_group_name_registry") as reset,
-    ):
-        cleanup_dist_env_for_snapshot()
-
-    destroyer = destroy_model.call_args.args[0]
-    destroy_world.assert_called_once_with(destroyer)
-    reset.assert_called_once_with()
