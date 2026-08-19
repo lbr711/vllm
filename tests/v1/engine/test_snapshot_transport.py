@@ -9,6 +9,26 @@ import zmq
 
 from vllm.snapshot.utils import RETRY_INTERVAL
 from vllm.v1.engine.core import EngineCoreProc
+from vllm.v1.engine.utils import EngineZmqAddresses
+
+
+def test_transport_reconnect_is_not_required_for_ipc_only():
+    addresses = EngineZmqAddresses(
+        inputs=["ipc:///tmp/input"],
+        outputs=["ipc:///tmp/output"],
+    )
+
+    assert not EngineCoreProc._transport_requires_reconnect(addresses)
+
+
+def test_transport_reconnect_is_required_for_tcp_coordinator():
+    addresses = EngineZmqAddresses(
+        inputs=["ipc:///tmp/input"],
+        outputs=["ipc:///tmp/output"],
+        coordinator_input="tcp://10.0.0.1:1234",
+    )
+
+    assert EngineCoreProc._transport_requires_reconnect(addresses)
 
 
 def test_transport_restore_retries_until_master_ip_is_available():

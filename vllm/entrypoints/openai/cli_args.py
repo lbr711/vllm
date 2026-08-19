@@ -14,7 +14,7 @@ from dataclasses import field
 from typing import Any, Literal
 
 import vllm.envs as envs
-from vllm.config import SnapshotConfig, config
+from vllm.config import config
 from vllm.engine.arg_utils import AsyncEngineArgs, optional_type
 from vllm.entrypoints.chat_utils import (
     ChatTemplateContentFormatOption,
@@ -229,8 +229,6 @@ class FrontendArgs(BaseFrontendArgs):
     """Host name."""
     port: int = 8000
     """Port number."""
-    snapshot_config: SnapshotConfig = field(default_factory=SnapshotConfig)
-    """Container snapshot configuration."""
     data_parallel_supervisor_port: int = 9256
     """HTTP port for aggregated health endpoints in multi-port external LB
     mode."""
