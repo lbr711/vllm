@@ -31,12 +31,11 @@ from vllm.logger import init_logger
 from vllm.logging_utils.dump_input import dump_engine_exception
 from vllm.lora.request import LoRARequest
 from vllm.multimodal import MULTIMODAL_REGISTRY
-from vllm.snapshot.lifecycle import (
-    resume_engine,
-    suspend_engine,
-    unlock_engine,
+from vllm.snapshot.kv_transfer import (
+    refresh_scheduler_after_resume,
+    refresh_scheduler_handshake_metadata_after_resume,
 )
-from vllm.snapshot.utils import is_restore
+from vllm.snapshot.utils import get_local_ip, is_restore
 from vllm.tasks import POOLING_TASKS, SupportedTask
 from vllm.tracing import instrument, maybe_init_worker_tracer
 from vllm.transformers_utils.config import maybe_register_config_serialize_by_value
@@ -1842,10 +1841,10 @@ class EngineCoreProc(EngineCore):
                 self._send_abort_outputs_to_client(list(req_ids), client_index)
 
     def suspend(self, model_save_path: str | None = None) -> None:
-        suspend_engine(self, model_save_path)
+        self.model_executor.suspend(model_save_path)
 
     def device_unlock(self) -> None:
-        unlock_engine(self)
+        self.model_executor.device_unlock()
 
     def resume(
         self,
@@ -1853,7 +1852,30 @@ class EngineCoreProc(EngineCore):
         model_path: str | None = None,
     ) -> None:
         assert data_parallel_master_ip is not None
-        resume_engine(self, data_parallel_master_ip, model_path)
+        with self._transport_lock:
+            if not self._transport_restored:
+                self._reconnect_transport(data_parallel_master_ip)
+                self._transport_restored = True
+
+        local_ip = get_local_ip()
+        parallel_config = self.vllm_config.parallel_config
+        parallel_config.data_parallel_master_ip = data_parallel_master_ip
+        kv_config = self.vllm_config.kv_transfer_config
+        new_engine_id = str(kv_config.engine_id) if kv_config is not None else None
+        self.model_executor.resume(
+            local_ip,
+            data_parallel_master_ip,
+            model_path,
+            new_engine_id,
+        )
+
+        if self.dp_group is not None:
+            stateless_destroy_torch_distributed_process_group(self.dp_group)
+            parallel_config._data_parallel_master_port_list.clear()
+            self.dp_group = parallel_config.stateless_init_dp_group()
+
+        refresh_scheduler_after_resume(self, local_ip)
+        refresh_scheduler_handshake_metadata_after_resume(self)
 
 
 class DPEngineCoreProc(EngineCoreProc):

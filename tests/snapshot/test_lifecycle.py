@@ -5,7 +5,8 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
-from vllm.snapshot.lifecycle import resume_engine, suspend_engine, unlock_engine
+from vllm.v1.engine.core import EngineCoreProc
+from vllm.v1.executor.abstract import Executor
 
 
 def _engine(*, transport_restored: bool, dp_group=None):
@@ -18,8 +19,8 @@ def _engine(*, transport_restored: bool, dp_group=None):
         _transport_lock=nullcontext(),
         _transport_restored=transport_restored,
         _reconnect_transport=Mock(),
-        collective_rpc=Mock(),
         dp_group=dp_group,
+        model_executor=Mock(),
         vllm_config=SimpleNamespace(
             parallel_config=parallel_config,
             kv_transfer_config=None,
@@ -28,18 +29,30 @@ def _engine(*, transport_restored: bool, dp_group=None):
     return engine
 
 
-def test_suspend_and_unlock_delegate_to_workers():
+def test_suspend_and_unlock_delegate_to_model_executor():
     engine = _engine(transport_restored=True)
 
-    with patch("vllm.snapshot.lifecycle.gc.collect") as collect:
-        suspend_engine(engine, "/snapshot/model")
-    unlock_engine(engine)
+    EngineCoreProc.suspend(engine, "/snapshot/model")
+    EngineCoreProc.device_unlock(engine)
 
-    collect.assert_called_once_with()
-    assert engine.collective_rpc.call_args_list == [
-        call("snapshot_prepare_suspend", args=("/snapshot/model",)),
-        call("snapshot_suspend"),
-        call("snapshot_unlock"),
+    engine.model_executor.suspend.assert_called_once_with("/snapshot/model")
+    engine.model_executor.device_unlock.assert_called_once_with()
+
+
+def test_model_executor_delegates_lifecycle_to_workers():
+    executor = SimpleNamespace(collective_rpc=Mock())
+
+    Executor.suspend(executor, "/snapshot/model")
+    Executor.device_unlock(executor)
+    Executor.resume(executor, "10.0.0.2", "10.0.0.3", "/snapshot/model", None)
+
+    assert executor.collective_rpc.call_args_list == [
+        call("suspend", args=("/snapshot/model",)),
+        call("device_unlock"),
+        call(
+            "resume",
+            args=("10.0.0.2", "10.0.0.3", "/snapshot/model", None),
+        ),
     ]
 
 
@@ -47,29 +60,21 @@ def test_resume_reconnects_transport_before_worker_restore():
     engine = _engine(transport_restored=False)
 
     with (
-        patch("vllm.snapshot.lifecycle.get_local_ip", return_value="10.0.0.2"),
-        patch("vllm.snapshot.lifecycle.refresh_scheduler_after_resume") as refresh,
+        patch("vllm.v1.engine.core.get_local_ip", return_value="10.0.0.2"),
+        patch("vllm.v1.engine.core.refresh_scheduler_after_resume") as refresh,
         patch(
-            "vllm.snapshot.lifecycle.refresh_scheduler_handshake_metadata_after_resume"
+            "vllm.v1.engine.core.refresh_scheduler_handshake_metadata_after_resume"
         ) as refresh_metadata,
     ):
-        resume_engine(engine, "10.0.0.3", "/snapshot/model")
+        EngineCoreProc.resume(engine, "10.0.0.3", "/snapshot/model")
 
         assert engine.vllm_config.parallel_config.data_parallel_master_ip == "10.0.0.3"
-        assert engine.collective_rpc.call_args_list == [
-            call(
-                "snapshot_prepare_resume",
-                args=("10.0.0.2", "10.0.0.3"),
-            ),
-            call(
-                "snapshot_restore_model",
-                args=("/snapshot/model",),
-            ),
-            call(
-                "snapshot_rebuild_kv_transfer",
-                args=("10.0.0.2", None),
-            ),
-        ]
+        engine.model_executor.resume.assert_called_once_with(
+            "10.0.0.2",
+            "10.0.0.3",
+            "/snapshot/model",
+            None,
+        )
     engine._reconnect_transport.assert_called_once_with("10.0.0.3")
     assert engine._transport_restored
     refresh.assert_called_once_with(engine, "10.0.0.2")
@@ -80,16 +85,14 @@ def test_resume_rebuilds_engine_core_dp_group():
     engine = _engine(transport_restored=True, dp_group="old-dp-group")
 
     with (
-        patch("vllm.snapshot.lifecycle.get_local_ip", return_value="10.0.0.2"),
         patch(
-            "vllm.snapshot.lifecycle.stateless_destroy_torch_distributed_process_group"
+            "vllm.v1.engine.core.stateless_destroy_torch_distributed_process_group"
         ) as destroy_dp_group,
-        patch("vllm.snapshot.lifecycle.refresh_scheduler_after_resume"),
-        patch(
-            "vllm.snapshot.lifecycle.refresh_scheduler_handshake_metadata_after_resume"
-        ),
+        patch("vllm.v1.engine.core.get_local_ip", return_value="10.0.0.2"),
+        patch("vllm.v1.engine.core.refresh_scheduler_after_resume"),
+        patch("vllm.v1.engine.core.refresh_scheduler_handshake_metadata_after_resume"),
     ):
-        resume_engine(engine, "10.0.0.3", None)
+        EngineCoreProc.resume(engine, "10.0.0.3", None)
 
     destroy_dp_group.assert_called_once_with("old-dp-group")
     assert engine.vllm_config.parallel_config._data_parallel_master_port_list == []
