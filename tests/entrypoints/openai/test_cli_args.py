@@ -81,6 +81,12 @@ def test_snapshot_config_arg_parsing(serve_parser):
     assert args.snapshot_config.enable_auto_checkpoint
 
 
+def test_snapshot_config_disabled_by_default(serve_parser):
+    args = serve_parser.parse_args([])
+
+    assert args.snapshot_config is None
+
+
 def test_auto_checkpoint_requires_snapshot_metadata(serve_parser):
     with pytest.raises(SystemExit):
         serve_parser.parse_args(

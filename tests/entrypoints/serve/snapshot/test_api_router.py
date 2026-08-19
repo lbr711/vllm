@@ -65,6 +65,16 @@ def test_snapshot_router_owns_lifecycle_endpoints():
     }
 
 
+def test_snapshot_router_is_not_attached_without_config():
+    app = FastAPI()
+    app.state.args = SimpleNamespace(snapshot_config=None)
+
+    attach_router(app)
+
+    paths = {route.path for route in app.routes}
+    assert paths.isdisjoint({"/suspend", "/resume", "/device_unlock"})
+
+
 @pytest.mark.parametrize("enable_auto_checkpoint", [False, True])
 def test_snapshot_health_route_requires_auto_checkpoint(enable_auto_checkpoint):
     app = FastAPI()
@@ -241,8 +251,7 @@ async def test_snapshot_health_waits_for_suspend_on_cold_start():
     request = _request()
 
     with patch(
-        "vllm.entrypoints.serve.snapshot.api_router."
-        "is_restore",
+        "vllm.entrypoints.serve.snapshot.api_router.is_restore",
         return_value=False,
     ):
         response = await snapshot_health(request)
@@ -260,8 +269,7 @@ async def test_snapshot_health_waits_for_resume_after_restore():
     request.app.state.snapshot_monitor.mark_suspend_done()
 
     with patch(
-        "vllm.entrypoints.serve.snapshot.api_router."
-        "is_restore",
+        "vllm.entrypoints.serve.snapshot.api_router.is_restore",
         return_value=True,
     ):
         response = await snapshot_health(request)

@@ -54,11 +54,7 @@ async def snapshot_health(raw_request: Request) -> Response:
         return Response(status_code=HTTPStatus.SERVICE_UNAVAILABLE)
 
     monitor = snapshot_monitor(raw_request)
-    ready = (
-        monitor.is_resume_done
-        if is_restore()
-        else monitor.is_suspend_done
-    )
+    ready = monitor.is_resume_done if is_restore() else monitor.is_suspend_done
     status_code = HTTPStatus.OK if ready else HTTPStatus.ACCEPTED
     return Response(status_code=status_code)
 
@@ -100,6 +96,8 @@ async def device_unlock(raw_request: Request) -> Response:
 
 
 def attach_router(app: FastAPI) -> None:
+    if app.state.args.snapshot_config is None:
+        return
     app.include_router(router)
     if app.state.args.snapshot_config.enable_auto_checkpoint:
         app.include_router(health_router)

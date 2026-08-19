@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import argparse
-import multiprocessing
 import signal
 import time
 
@@ -321,7 +320,8 @@ def run_multi_api_server(args: argparse.Namespace):
         defer_api_server_ports=not (rust_frontend_path or is_ray_dp),
     )
 
-    with launch_core_engines(vllm_config, executor_class, log_stats, addresses, num_api_servers
+    with launch_core_engines(
+        vllm_config, executor_class, log_stats, addresses, num_api_servers
     ) as (local_engine_manager, coordinator, addresses, tensor_queue):
         stats_update_address = (
             coordinator.get_stats_publish_address() if coordinator else None
@@ -339,16 +339,20 @@ def run_multi_api_server(args: argparse.Namespace):
                 stats_update_address=stats_update_address,
             )
         else:
-            from vllm.snapshot.monitor import SnapshotMonitor
+            snapshot_monitor = None
+            if vllm_config.snapshot_config is not None:
+                import multiprocessing
 
-            # All API workers must observe the same lifecycle state. Create the
-            # synchronization primitives from the same spawn context used by
-            # APIServerProcessManager to make the monitor process-shared.
-            spawn_context = multiprocessing.get_context("spawn")
-            snapshot_monitor = SnapshotMonitor(
-                spawn_context.Event,
-                spawn_context.Lock,
-            )
+                from vllm.snapshot.monitor import SnapshotMonitor
+
+                # All API workers must observe the same lifecycle state. Create
+                # the synchronization primitives from the same spawn context
+                # used by APIServerProcessManager.
+                spawn_context = multiprocessing.get_context("spawn")
+                snapshot_monitor = SnapshotMonitor(
+                    spawn_context.Event,
+                    spawn_context.Lock,
+                )
 
             # Start API server(s).
             api_server_manager = APIServerProcessManager(

@@ -608,7 +608,7 @@ class EngineArgs:
     structured_outputs_config: StructuredOutputsConfig = get_field(
         VllmConfig, "structured_outputs_config"
     )
-    snapshot_config: SnapshotConfig = get_field(VllmConfig, "snapshot_config")
+    snapshot_config: SnapshotConfig | None = get_field(VllmConfig, "snapshot_config")
     reasoning_parser: str = StructuredOutputsConfig.reasoning_parser
     reasoning_parser_plugin: str | None = None
 

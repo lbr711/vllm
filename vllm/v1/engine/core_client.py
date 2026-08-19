@@ -516,23 +516,30 @@ class MPClient(EngineCoreClient):
             # State used for data parallel.
             self.engines_running = False
             parallel_config = vllm_config.parallel_config
-            # Always enable ROUTER_HANDOVER on the client input socket.
-            # Engines reconnect with a fixed identity in several paths:
-            # - elastic EP remove/re-add of the same rank
-            # - snapshot resume recreating the EngineCore input DEALER thread
-            # Without handover, libzmq rejects the new DEALER while the old
-            # identity is still held, and the READY handshake is lost.
-            enable_input_socket_handover = True
+            # Engines reconnect with a fixed identity during elastic EP and
+            # snapshot resume. ROUTER_HANDOVER lets the new DEALER replace the
+            # old connection so its READY handshake is not lost.
+            enable_input_socket_handover = (
+                parallel_config.enable_elastic_ep
+                or vllm_config.snapshot_config is not None
+            )
 
             self.stats_update_address: str | None = None
             # API workers receive a process-shared monitor from their parent;
             # direct clients use the same state machine with local primitives.
-            snapshot_monitor = (
-                client_addresses.get("snapshot_monitor") if client_addresses else None
-            )
-            self.snapshot_monitor = (
-                snapshot_monitor if snapshot_monitor is not None else SnapshotMonitor()
-            )
+            if vllm_config.snapshot_config is None:
+                self.snapshot_monitor = None
+            else:
+                snapshot_monitor = (
+                    client_addresses.get("snapshot_monitor")
+                    if client_addresses
+                    else None
+                )
+                self.snapshot_monitor = (
+                    snapshot_monitor
+                    if snapshot_monitor is not None
+                    else SnapshotMonitor()
+                )
             tensor_queue: Queue | None = None
             if client_addresses and "input_address" in client_addresses:
                 # Engines are managed externally to this client.
@@ -609,7 +616,7 @@ class MPClient(EngineCoreClient):
                         coordinator.get_stats_publish_address()
                     )
 
-            self._is_tcp_input_transport = (split_zmq_path(input_address)[0] == "tcp")
+            self._is_tcp_input_transport = split_zmq_path(input_address)[0] == "tcp"
 
             # Serialization setup with tensor queues for multimodal tensor IPC.
             tensor_ipc_sender: TensorIpcSender | None = None
@@ -1200,7 +1207,10 @@ class AsyncMPClient(MPClient):
         logger.info("[snapshot] api server wait for all engines ready!")
 
     async def suspend_async(self, model_save_path: str | None = None) -> None:
-        if not self.snapshot_monitor.try_start_suspending():
+        snapshot_monitor = self.snapshot_monitor
+        if snapshot_monitor is None:
+            raise RuntimeError("Snapshot lifecycle requires --snapshot-config")
+        if not snapshot_monitor.try_start_suspending():
             logger.warning("[snapshot] api server is suspending or already suspended.")
             return
 
@@ -1208,9 +1218,9 @@ class AsyncMPClient(MPClient):
         try:
             await self.call_utility_async("suspend", model_save_path)
         except BaseException:
-            self.snapshot_monitor.mark_suspend_failed()
+            snapshot_monitor.mark_suspend_failed()
             raise
-        self.snapshot_monitor.mark_suspend_done()
+        snapshot_monitor.mark_suspend_done()
         time_after_suspend = time.perf_counter()
         logger.info(
             "It took %.6f seconds to fall suspend.",
@@ -1218,7 +1228,10 @@ class AsyncMPClient(MPClient):
         )
 
     async def device_unlock_async(self) -> None:
-        if not self.snapshot_monitor.try_start_unlocking():
+        snapshot_monitor = self.snapshot_monitor
+        if snapshot_monitor is None:
+            raise RuntimeError("Snapshot lifecycle requires --snapshot-config")
+        if not snapshot_monitor.try_start_unlocking():
             logger.warning(
                 "[snapshot] api server cannot unlock or is already unlocking."
             )
@@ -1228,9 +1241,9 @@ class AsyncMPClient(MPClient):
         try:
             await self.call_utility_async("device_unlock")
         except BaseException:
-            self.snapshot_monitor.mark_unlock_failed()
+            snapshot_monitor.mark_unlock_failed()
             raise
-        self.snapshot_monitor.mark_unlock_done()
+        snapshot_monitor.mark_unlock_done()
         time_after_unlock = time.perf_counter()
         logger.info(
             "It took %.6f seconds to device_unlock.",
@@ -1264,14 +1277,17 @@ class AsyncMPClient(MPClient):
         data_parallel_master_ip: str | None = None,
         model_path: str | None = None,
     ) -> None:
-        if not self.snapshot_monitor.is_suspend_done:
+        snapshot_monitor = self.snapshot_monitor
+        if snapshot_monitor is None:
+            raise RuntimeError("Snapshot lifecycle requires --snapshot-config")
+        if not snapshot_monitor.is_suspend_done:
             logger.warning("[snapshot] api server is not suspend.")
             return
-        if not self.snapshot_monitor.try_start_resuming():
+        if not snapshot_monitor.try_start_resuming():
             logger.warning("[snapshot] api server is resuming or already resumed.")
             return
         if not is_restore():
-            self.snapshot_monitor.mark_resume_failed()
+            snapshot_monitor.mark_resume_failed()
             logger.warning(
                 "[snapshot] api server resume fail, not find /root/.grusflag"
             )
@@ -1283,9 +1299,9 @@ class AsyncMPClient(MPClient):
             await self._reconnect_dp_coordinator(data_parallel_master_ip)
             await self._resume_engines(data_parallel_master_ip, model_path)
         except BaseException:
-            self.snapshot_monitor.mark_resume_failed()
+            snapshot_monitor.mark_resume_failed()
             raise
-        self.snapshot_monitor.mark_resume_done()
+        snapshot_monitor.mark_resume_done()
         time_after_resume = time.perf_counter()
         logger.info(
             "It took %.6f seconds to resume.",

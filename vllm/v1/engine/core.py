@@ -899,6 +899,9 @@ class EngineCoreProc(EngineCore):
         self.dp_group: Any = None
         self._transport_lock = threading.Lock()
         self._transport_reconnected = False
+        self._input_stop_event: threading.Event
+        self._input_stop_reader: int
+        self._input_stop_writer: int
 
         # Receiver for tensor IPC
         self.tensor_ipc_receiver: TensorIpcReceiver | None = None
@@ -950,8 +953,13 @@ class EngineCoreProc(EngineCore):
 
             self._start_io_threads()
 
-        snapshot_metadata = vllm_config.snapshot_config.snapshot_metadata
-        if snapshot_metadata is not None and any(split_zmq_path(address)[0] == "tcp" for address in self.addresses.inputs):
+        snapshot_config = vllm_config.snapshot_config
+        snapshot_metadata = (
+            snapshot_config.snapshot_metadata if snapshot_config is not None else None
+        )
+        if snapshot_metadata is not None and any(
+            split_zmq_path(address)[0] == "tcp" for address in self.addresses.inputs
+        ):
             threading.Thread(
                 target=self._reconnect_transport_with_snapshot_metadata,
                 args=(snapshot_metadata,),
@@ -1639,7 +1647,7 @@ class EngineCoreProc(EngineCore):
             ready_event.set()
             del ready_event
             while not stop_event.is_set():
-                for input_socket, _ in poller.poll(timeout=100):
+                for input_socket, _ in poller.poll():
                     if input_socket == stop_fd:
                         os.read(stop_fd, 1)
                         return
