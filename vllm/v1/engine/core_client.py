@@ -9,7 +9,7 @@ import uuid
 import weakref
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
@@ -644,16 +644,23 @@ class MPClient(EngineCoreClient):
             ]
 
             # Wait for ready messages from each engine on the input socket.
-            timeout_message = (
-                "Timed out waiting for engine core processes to start. "
-                "This is often caused by slow weight loading for large models. "
-                f"Waited {VLLM_ENGINE_READY_TIMEOUT_S}s (configured by "
-                "VLLM_ENGINE_READY_TIMEOUT_S). To increase the timeout, set "
-                "VLLM_ENGINE_READY_TIMEOUT_S=<seconds>"
-            )
-            for _, payload in self._receive_engine_ready_messages(
-                self.core_engines, timeout_message
-            ):
+            identities = set(self.core_engines)
+            sync_input_socket = zmq.Socket.shadow(self.input_socket)
+            while identities:
+                if not sync_input_socket.poll(
+                    timeout=VLLM_ENGINE_READY_TIMEOUT_S * 1000  # convert to ms
+                ):
+                    raise TimeoutError(
+                        f"Timed out waiting for engine core processes to "
+                        f"start. This is often caused by slow weight loading "
+                        f"for large models. Waited "
+                        f"{VLLM_ENGINE_READY_TIMEOUT_S}s (configured by "
+                        f"VLLM_ENGINE_READY_TIMEOUT_S). To increase the "
+                        f"timeout, set the environment variable: "
+                        f"VLLM_ENGINE_READY_TIMEOUT_S=<seconds>"
+                    )
+                identity, payload = sync_input_socket.recv_multipart()
+                identities.remove(identity)
                 self._apply_ready_response(payload)
 
             self.core_engine: EngineIdentity = self.core_engines[0]
@@ -705,22 +712,6 @@ class MPClient(EngineCoreClient):
 
     def dp_engines_running(self) -> bool:
         return self.engines_running
-
-    def _receive_engine_ready_messages(
-        self,
-        engine_identities: list[EngineIdentity],
-        timeout_message: str,
-    ) -> Iterator[tuple[EngineIdentity, bytes]]:
-        identities = set(engine_identities)
-        sync_input_socket = zmq.Socket.shadow(self.input_socket)
-        while identities:
-            if not sync_input_socket.poll(
-                timeout=VLLM_ENGINE_READY_TIMEOUT_S * 1000
-            ):
-                raise TimeoutError(timeout_message)
-            identity, payload = sync_input_socket.recv_multipart()
-            identities.remove(identity)
-            yield identity, payload
 
     def start_engine_core_monitor(self):
         """Start a monitor thread for engine core processes."""
@@ -1191,18 +1182,22 @@ class AsyncMPClient(MPClient):
         await self.call_utility_async("wake_up", tags)
 
     async def wait_for_engines_ready(self):
-        messages = self._receive_engine_ready_messages(
-            self.core_engines,
-            "[snapshot] Timed out waiting for engines to send initial message "
-            "on input socket.",
-        )
-        remaining = len(self.core_engines)
-        for identity, _ in messages:
-            remaining -= 1
+        identities = set(self.core_engines)
+        sync_input_socket = zmq.Socket.shadow(self.input_socket)
+        while len(identities):
+            if not sync_input_socket.poll(
+                timeout=VLLM_ENGINE_READY_TIMEOUT_S * 1000  # convert to ms
+            ):
+                raise TimeoutError(
+                    "[snapshot] Timed out waiting for engines to send "
+                    "initial message on input socket."
+                )
+            identity, _ = sync_input_socket.recv_multipart()
+            identities.remove(identity)
             logger.info(
                 "[snapshot] Engine %s ready. Remaining: %d",
                 identity,
-                remaining,
+                len(identities),
             )
         logger.info("[snapshot] api server wait for all engines ready!")
 
