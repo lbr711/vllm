@@ -609,9 +609,7 @@ class MPClient(EngineCoreClient):
                         coordinator.get_stats_publish_address()
                     )
 
-            self._snapshot_transport_reconnect = (
-                split_zmq_path(input_address)[0] == "tcp"
-            )
+            self._is_tcp_input_transport = (split_zmq_path(input_address)[0] == "tcp")
 
             # Serialization setup with tensor queues for multimodal tensor IPC.
             tensor_ipc_sender: TensorIpcSender | None = None
@@ -1252,7 +1250,7 @@ class AsyncMPClient(MPClient):
     ) -> None:
         logger.info("[snapshot] api server wait_for_engines_ready")
         ready_task = asyncio.create_task(self.wait_for_engines_ready())
-        if self._snapshot_transport_reconnect:
+        if self._is_tcp_input_transport:
             # Centralized DP restores TCP before the utility request can reach
             # the EngineCores. Distributed DP retains its IPC transport.
             await ready_task

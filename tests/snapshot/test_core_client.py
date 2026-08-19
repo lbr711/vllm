@@ -10,14 +10,14 @@ from vllm.v1.engine.core_client import AsyncMPClient
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "transport_reconnect,expected_order",
+    "is_tcp_input_transport,expected_order",
     [
         (True, ["ready", "resume"]),
         (False, ["resume", "ready"]),
     ],
 )
 async def test_resume_engine_order_matches_transport(
-    transport_reconnect,
+    is_tcp_input_transport,
     expected_order,
 ):
     calls = []
@@ -32,7 +32,7 @@ async def test_resume_engine_order_matches_transport(
         calls.append("resume")
 
     client = SimpleNamespace(
-        _snapshot_transport_reconnect=transport_reconnect,
+        _is_tcp_input_transport=is_tcp_input_transport,
         wait_for_engines_ready=wait_for_engines_ready,
         call_utility_async=call_utility_async,
     )

@@ -141,7 +141,7 @@ async def test_engine_client_owns_snapshot_lifecycle_state():
     client.snapshot_monitor = monitor = SnapshotMonitor()
     client.call_utility_async = AsyncMock()
     client.wait_for_engines_ready = AsyncMock()
-    client._snapshot_transport_reconnect = False
+    client._is_tcp_input_transport = False
 
     async def suspend(*args):
         assert monitor.is_suspending
