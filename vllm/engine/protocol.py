@@ -171,18 +171,22 @@ class EngineClient(ABC):
         ...
 
     @abstractmethod
-    async def suspend(self, model_save_path=None) -> None:
+    async def suspend(self, model_save_path: str | None = None) -> None:
         """Suspend the engine"""
         ...
 
     @abstractmethod
-    async def resume(self, data_parallel_master_ip = None, model_path=None) -> None:
+    async def resume(
+        self,
+        data_parallel_master_ip: str | None = None,
+        model_path: str | None = None,
+    ) -> None:
         """Resume the engine"""
         ...
 
     @abstractmethod
     async def device_unlock(self) -> None:
-        """Unlock NPU devices after snapshot checkpoint."""
+        """Unlock devices after snapshot checkpoint."""
         ...
 
     @abstractmethod

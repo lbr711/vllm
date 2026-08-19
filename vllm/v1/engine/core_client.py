@@ -245,11 +245,13 @@ class EngineCoreClient(ABC):
     async def wake_up_async(self, tags: list[str] | None = None) -> None:
         raise NotImplementedError
 
-    async def suspend_async(self, model_save_path=None) -> None:
+    async def suspend_async(self, model_save_path: str | None = None) -> None:
         raise NotImplementedError
 
     async def resume_async(
-        self, data_parallel_master_ip: str | None = None, model_path=None
+        self,
+        data_parallel_master_ip: str | None = None,
+        model_path: str | None = None,
     ) -> None:
         raise NotImplementedError
 
@@ -1294,7 +1296,7 @@ class AsyncMPClient(MPClient):
             )
         logger.info("[snapshot] api server wait for all engines ready!")
 
-    async def suspend_async(self, model_save_path=None) -> None:
+    async def suspend_async(self, model_save_path: str | None = None) -> None:
         if not self._snapshot_try_start_suspending():
             logger.warning("[snapshot] api server is suspending or already suspended.")
             return
@@ -1333,7 +1335,9 @@ class AsyncMPClient(MPClient):
         )
 
     async def resume_async(
-        self, data_parallel_master_ip: str | None = None, model_path=None
+        self,
+        data_parallel_master_ip: str | None = None,
+        model_path: str | None = None,
     ) -> None:
         if not self._snapshot_is_suspend_done():
             logger.warning("[snapshot] api server is not suspend.")
@@ -1601,7 +1605,9 @@ class DPAsyncMPClient(AsyncMPClient):
         return self.core_engine
 
     async def resume_async(
-        self, data_parallel_master_ip: str | None = None, model_path=None
+        self,
+        data_parallel_master_ip: str | None = None,
+        model_path: str | None = None,
     ) -> None:
         if not self._snapshot_is_suspend_done():
             logger.warning("[snapshot] api server is not suspend.")
