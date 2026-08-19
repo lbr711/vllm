@@ -3,7 +3,8 @@
 
 import gc
 import os
-from typing import Any, Protocol
+from collections.abc import Callable
+from typing import Any, Protocol, TypeVar
 
 from vllm.distributed import stateless_destroy_torch_distributed_process_group
 from vllm.logger import init_logger
@@ -14,6 +15,8 @@ from vllm.snapshot.kv_transfer import (
 from vllm.snapshot.utils import get_local_ip
 
 logger = init_logger(__name__)
+
+_R = TypeVar("_R")
 
 
 class SnapshotEngine(Protocol):
@@ -26,9 +29,11 @@ class SnapshotEngine(Protocol):
 
     def collective_rpc(
         self,
-        method: str,
+        method: str | Callable[..., _R],
+        timeout: float | None = None,
         args: tuple[Any, ...] = (),
-    ) -> Any: ...
+        kwargs: dict[str, Any] | None = None,
+    ) -> list[_R]: ...
 
     def _reconnect_transport(self, data_parallel_master_ip: str) -> None: ...
 

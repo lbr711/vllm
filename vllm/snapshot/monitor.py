@@ -16,7 +16,7 @@ class _Event(Protocol):
 
 
 class _Lock(Protocol):
-    def __enter__(self) -> "_Lock": ...
+    def __enter__(self) -> object: ...
 
     def __exit__(
         self,

@@ -897,8 +897,8 @@ class EngineCoreProc(EngineCore):
         identity = self.engine_index.to_bytes(length=2, byteorder="little")
         self.engines_running = False
         self.shutdown_state = EngineShutdownState.RUNNING
-        self.addresses = None
         self.identity = identity
+        self.dp_group: Any = None
         self._transport_lock = threading.Lock()
         self._transport_restored = False
 
@@ -1052,8 +1052,7 @@ class EngineCoreProc(EngineCore):
                 self.addresses.coordinator_output, data_parallel_master_ip
             )
         logger.info(
-            "[snapshot] engine core %d starting transport IO threads with "
-            "master IP %s",
+            "[snapshot] engine core %d starting transport IO threads with master IP %s",
             self.engine_index,
             data_parallel_master_ip,
         )
@@ -1086,10 +1085,7 @@ class EngineCoreProc(EngineCore):
                     break
                 except Exception as exc:
                     attempts += 1
-                    if (
-                        attempts == 1
-                        or attempts % RETRY_LOG_FREQUENCY == 0
-                    ):
+                    if attempts == 1 or attempts % RETRY_LOG_FREQUENCY == 0:
                         logger.warning(
                             "[snapshot] data_parallel_master_ip is not ready "
                             "after restore, will retry (attempt %d): %s",
@@ -1720,7 +1716,11 @@ class EngineCoreProc(EngineCore):
             while True:
                 output = self.output_queue.get()
                 if output == EngineCoreProc.ENGINE_CORE_THREAD_FINISH:
-                    logger.info(f"[snapshot] engine core output thread received ENGINE_CORE_THREAD_FINISH, stop output thread")
+                    logger.info(
+                        "[snapshot] engine core output thread received %s; "
+                        "stopping output thread",
+                        "ENGINE_CORE_THREAD_FINISH",
+                    )
                     break
                 if output == EngineCoreProc.ENGINE_CORE_DEAD:
                     for socket in sockets:

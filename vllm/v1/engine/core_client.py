@@ -3,7 +3,6 @@
 import asyncio
 import contextlib
 import queue
-import re
 import sys
 import time
 import uuid
@@ -19,6 +18,7 @@ from threading import Thread
 from typing import Any, TypeAlias, TypeVar
 
 import msgspec.msgpack
+import regex as re
 import zmq
 import zmq.asyncio
 
@@ -491,6 +491,13 @@ class MPClient(EngineCoreClient):
         * SyncMPClient subclass for LLM usage
     """
 
+    is_suspending: bool
+    is_unlocking: bool
+    is_resuming: bool
+    suspend_done: bool
+    unlock_done: bool
+    resume_done: bool
+
     def __init__(
         self,
         asyncio_mode: bool,
@@ -529,6 +536,12 @@ class MPClient(EngineCoreClient):
             self.snapshot_monitor = (
                 client_addresses.get("snapshot_monitor") if client_addresses else None
             )
+            self.is_suspending = False
+            self.is_unlocking = False
+            self.is_resuming = False
+            self.suspend_done = False
+            self.unlock_done = False
+            self.resume_done = False
             tensor_queue: Queue | None = None
             if client_addresses and "input_address" in client_addresses:
                 # Engines are managed externally to this client.
@@ -1069,13 +1082,6 @@ class AsyncMPClient(MPClient):
             client_addresses=client_addresses,
         )
 
-        # Lifecycle guards for suspend/resume re-entrancy.
-        self.is_suspending = False
-        self.is_unlocking = False
-        self.is_resuming = False
-        self.suspend_done = False
-        self.unlock_done = False
-        self.resume_done = False
         self.client_count = client_count
         self.client_index = client_index
         self.outputs_queue = asyncio.Queue[EngineCoreOutputs | Exception]()
@@ -1345,13 +1351,9 @@ class AsyncMPClient(MPClient):
             # Centralized DP restores TCP before the utility request can reach
             # the EngineCores. Distributed DP retains its IPC transport.
             await ready_task
-            await self.call_utility_async(
-                "resume", data_parallel_master_ip, model_path
-            )
+            await self.call_utility_async("resume", data_parallel_master_ip, model_path)
         else:
-            await self.call_utility_async(
-                "resume", data_parallel_master_ip, model_path
-            )
+            await self.call_utility_async("resume", data_parallel_master_ip, model_path)
             await ready_task
 
     async def resume_async(
@@ -1614,15 +1616,18 @@ class DPAsyncMPClient(AsyncMPClient):
         data_parallel_master_ip: str,
     ) -> None:
         # Refresh the connection to the DP coordinator.
-        if not self.resources.stats_update_task.done():
-            self.resources.stats_update_task.cancel()
+        stats_update_task = self.resources.stats_update_task
+        assert stats_update_task is not None
+        if not stats_update_task.done():
+            stats_update_task.cancel()
             try:
-                await self.resources.stats_update_task
+                await stats_update_task
             except asyncio.CancelledError:
                 logger.info(
                     "[snapshot] api server stats_update_task cancelled successfully"
                 )
         self.resources.stats_update_task = None
+        assert self.stats_update_address is not None
         self.stats_update_address = re.sub(
             r"\d+\.\d+\.\d+\.\d+",
             data_parallel_master_ip,

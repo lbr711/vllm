@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-import re
 from typing import Any, Protocol
 from uuid import uuid4
+
+import regex as re
 
 from vllm.logger import init_logger
 
@@ -37,9 +38,7 @@ def refresh_scheduler_after_resume(
 ) -> None:
     """Refresh scheduler-side KV transport identity and address state."""
     kv_config = engine_core.vllm_config.kv_transfer_config
-    if kv_config is None or not (
-        kv_config.is_kv_producer or kv_config.is_kv_consumer
-    ):
+    if kv_config is None or not (kv_config.is_kv_producer or kv_config.is_kv_consumer):
         return
 
     connector = engine_core.scheduler.connector

@@ -52,8 +52,7 @@ def test_resume_reconnects_transport_before_worker_restore():
         patch("vllm.snapshot.lifecycle.get_local_ip", return_value="10.0.0.2"),
         patch("vllm.snapshot.lifecycle.refresh_scheduler_after_resume") as refresh,
         patch(
-            "vllm.snapshot.lifecycle."
-            "refresh_scheduler_handshake_metadata_after_resume"
+            "vllm.snapshot.lifecycle.refresh_scheduler_handshake_metadata_after_resume"
         ) as refresh_metadata,
         patch.dict(os.environ, {}, clear=True),
     ):
@@ -92,8 +91,7 @@ def test_resume_rebuilds_engine_core_dp_group():
         ) as destroy_dp_group,
         patch("vllm.snapshot.lifecycle.refresh_scheduler_after_resume"),
         patch(
-            "vllm.snapshot.lifecycle."
-            "refresh_scheduler_handshake_metadata_after_resume"
+            "vllm.snapshot.lifecycle.refresh_scheduler_handshake_metadata_after_resume"
         ),
     ):
         resume_engine(engine, "10.0.0.3", None)
