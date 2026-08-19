@@ -1038,6 +1038,7 @@ class EngineCoreProc(EngineCore):
         """Start the EngineCore input and output socket threads."""
         ready_event = threading.Event()
         self._input_stop_event = threading.Event()
+        self._input_stop_reader, self._input_stop_writer = os.pipe()
         self.input_thread = threading.Thread(
             target=self.process_input_sockets,
             args=(
@@ -1046,6 +1047,7 @@ class EngineCoreProc(EngineCore):
                 self.identity,
                 ready_event,
                 self._input_stop_event,
+                self._input_stop_reader,
             ),
             daemon=True,
         )
@@ -1071,10 +1073,28 @@ class EngineCoreProc(EngineCore):
 
     def _stop_io_threads(self) -> None:
         """Stop the EngineCore input and output socket threads."""
+        logger.info(
+            "[snapshot] engine core %d stopping transport IO threads",
+            self.engine_index,
+        )
         self._input_stop_event.set()
+        # A threading.Event cannot wake a ZMQ poll blocked on a stale TCP
+        # connection after restore. The pipe fd is registered with the poller
+        # and makes the stop request immediately observable by the IO thread.
+        os.write(self._input_stop_writer, b"\0")
         self.output_queue.put(EngineCoreProc.ENGINE_CORE_THREAD_FINISH)
         self.input_thread.join(timeout=9999)
+        logger.info(
+            "[snapshot] engine core %d input IO thread stopped",
+            self.engine_index,
+        )
         self.output_thread.join(timeout=9999)
+        logger.info(
+            "[snapshot] engine core %d output IO thread stopped",
+            self.engine_index,
+        )
+        os.close(self._input_stop_reader)
+        os.close(self._input_stop_writer)
 
     def _reconnect_transport(self, data_parallel_master_ip: str) -> None:
         """Reconnect EngineCore sockets to the restored master Pod IP."""
@@ -1102,7 +1122,17 @@ class EngineCoreProc(EngineCore):
             self.addresses.coordinator_output = replace_zmq_tcp_host(
                 self.addresses.coordinator_output, data_parallel_master_ip
             )
+        logger.info(
+            "[snapshot] engine core %d starting transport IO threads with "
+            "master IP %s",
+            self.engine_index,
+            data_parallel_master_ip,
+        )
         self._start_io_threads()
+        logger.info(
+            "[snapshot] engine core %d transport reconnect completed",
+            self.engine_index,
+        )
 
     def _restore_transport_from_metadata(self, snapshot_metadata: str) -> None:
         try:
@@ -1627,6 +1657,7 @@ class EngineCoreProc(EngineCore):
         identity: bytes,
         ready_event: threading.Event,
         stop_event: threading.Event,
+        stop_fd: int,
     ):
         """Input socket IO thread."""
 
@@ -1640,7 +1671,12 @@ class EngineCoreProc(EngineCore):
             input_sockets = [
                 stack.enter_context(
                     make_zmq_socket(
-                        ctx, input_address, zmq.DEALER, identity=identity, bind=False
+                        ctx,
+                        input_address,
+                        zmq.DEALER,
+                        identity=identity,
+                        bind=False,
+                        linger=0,
                     )
                 )
                 for input_address in input_addresses
@@ -1655,6 +1691,7 @@ class EngineCoreProc(EngineCore):
                         zmq.XSUB,
                         identity=identity,
                         bind=False,
+                        linger=0,
                     )
                 )
                 # Send subscription message to coordinator.
@@ -1662,6 +1699,7 @@ class EngineCoreProc(EngineCore):
 
             # Register sockets with poller.
             poller = zmq.Poller()
+            poller.register(stop_fd, zmq.POLLIN)
             ready_response = EngineCoreReadyResponse(
                 max_model_len=self.vllm_config.model_config.max_model_len,
                 num_gpu_blocks=self.vllm_config.cache_config.num_gpu_blocks or 0,
@@ -1687,6 +1725,9 @@ class EngineCoreProc(EngineCore):
             del ready_event
             while not stop_event.is_set():
                 for input_socket, _ in poller.poll(timeout=100):
+                    if input_socket == stop_fd:
+                        os.read(stop_fd, 1)
+                        return
                     parts = input_socket.recv_multipart(copy=False)
                     # (RequestType, RequestData)
                     type_frame, *data_frames = parts
