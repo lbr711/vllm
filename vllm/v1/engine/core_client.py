@@ -1328,6 +1328,32 @@ class AsyncMPClient(MPClient):
             time_after_unlock - time_before_unlock,
         )
 
+    async def _prepare_snapshot_resume(
+        self,
+        data_parallel_master_ip: str,
+    ) -> None:
+        """Prepare client-specific transport state before engine resume."""
+
+    async def _resume_engines(
+        self,
+        data_parallel_master_ip: str,
+        model_path: str | None,
+    ) -> None:
+        logger.info("[snapshot] api server wait_for_engines_ready")
+        ready_task = asyncio.create_task(self.wait_for_engines_ready())
+        if self._snapshot_transport_reconnect:
+            # Centralized DP restores TCP before the utility request can reach
+            # the EngineCores. Distributed DP retains its IPC transport.
+            await ready_task
+            await self.call_utility_async(
+                "resume", data_parallel_master_ip, model_path
+            )
+        else:
+            await self.call_utility_async(
+                "resume", data_parallel_master_ip, model_path
+            )
+            await ready_task
+
     async def resume_async(
         self,
         data_parallel_master_ip: str | None = None,
@@ -1349,21 +1375,8 @@ class AsyncMPClient(MPClient):
 
         try:
             assert data_parallel_master_ip is not None
-            logger.info("[snapshot] api server wait_for_engines_ready")
-            task = asyncio.create_task(self.wait_for_engines_ready())
-            if self._snapshot_transport_reconnect:
-                # In centralized DP, restored EngineCores must reconnect their
-                # TCP transport before the resume utility call can reach them.
-                await task
-                await self.call_utility_async(
-                    "resume", data_parallel_master_ip, model_path
-                )
-            else:
-                # Distributed DP keeps its IPC transport across restore.
-                await self.call_utility_async(
-                    "resume", data_parallel_master_ip, model_path
-                )
-                await task
+            await self._prepare_snapshot_resume(data_parallel_master_ip)
+            await self._resume_engines(data_parallel_master_ip, model_path)
         except BaseException:
             self._snapshot_mark_resume_failed()
             raise
@@ -1596,79 +1609,37 @@ class DPAsyncMPClient(AsyncMPClient):
     def get_core_engine_for_request(self, request: EngineCoreRequest):
         return self.core_engine
 
-    async def resume_async(
+    async def _prepare_snapshot_resume(
         self,
-        data_parallel_master_ip: str | None = None,
-        model_path: str | None = None,
+        data_parallel_master_ip: str,
     ) -> None:
-        if not self._snapshot_is_suspend_done():
-            logger.warning("[snapshot] api server is not suspend.")
-            return
-        if not self._snapshot_try_start_resuming():
-            logger.warning("[snapshot] api server is resuming or already resumed.")
-            return
-        if not is_restore():
-            self._snapshot_mark_resume_failed()
-            logger.warning(
-                "[snapshot] api server resume fail, not find /root/.grusflag"
-            )
-            return
-
-        time_before_resume = time.perf_counter()
-        try:
-            assert data_parallel_master_ip is not None
-            # refresh the connection to the DP coordinator
-            if not self.resources.stats_update_task.done():
-                self.resources.stats_update_task.cancel()
-                try:
-                    await self.resources.stats_update_task
-                except asyncio.CancelledError:
-                    logger.info(
-                        "[snapshot] api server stats_update_task cancelled successfully"
-                    )
-            self.resources.stats_update_task = None
-            self.stats_update_address = re.sub(
-                r"\d+\.\d+\.\d+\.\d+",
-                data_parallel_master_ip,
-                self.stats_update_address,
-            )
-            self.first_req_sock_addr = get_open_zmq_inproc_path()
-            self.first_req_send_socket = self.resources.first_req_send_socket = (
-                make_zmq_socket(self.ctx, self.first_req_sock_addr, zmq.PAIR, bind=True)
-            )
+        # Refresh the connection to the DP coordinator.
+        if not self.resources.stats_update_task.done():
+            self.resources.stats_update_task.cancel()
             try:
-                asyncio.get_running_loop()
-                self._ensure_stats_update_task()
-            except RuntimeError:
-                logger.error(
-                    "[snapshot] api server resume_async start stats_update_task failed"
+                await self.resources.stats_update_task
+            except asyncio.CancelledError:
+                logger.info(
+                    "[snapshot] api server stats_update_task cancelled successfully"
                 )
-                raise
-
-            # Wait for engines send READY message to client
-            logger.info("[snapshot] api server wait_for_engines_ready")
-            task = asyncio.create_task(self.wait_for_engines_ready())
-            if self._snapshot_transport_reconnect:
-                # Centralized DP restores the TCP transport before dispatching
-                # the resume utility request; distributed DP retains its IPC.
-                await task
-                await self.call_utility_async(
-                    "resume", data_parallel_master_ip, model_path
-                )
-            else:
-                await self.call_utility_async(
-                    "resume", data_parallel_master_ip, model_path
-                )
-                await task
-        except BaseException:
-            self._snapshot_mark_resume_failed()
-            raise
-        self._snapshot_mark_resume_done()
-        time_after_resume = time.perf_counter()
-        logger.info(
-            "It took %.6f seconds to resume.",
-            time_after_resume - time_before_resume,
+        self.resources.stats_update_task = None
+        self.stats_update_address = re.sub(
+            r"\d+\.\d+\.\d+\.\d+",
+            data_parallel_master_ip,
+            self.stats_update_address,
         )
+        self.first_req_sock_addr = get_open_zmq_inproc_path()
+        self.first_req_send_socket = self.resources.first_req_send_socket = (
+            make_zmq_socket(self.ctx, self.first_req_sock_addr, zmq.PAIR, bind=True)
+        )
+        try:
+            asyncio.get_running_loop()
+            self._ensure_stats_update_task()
+        except RuntimeError:
+            logger.error(
+                "[snapshot] api server resume_async start stats_update_task failed"
+            )
+            raise
 
 
 class DPLBAsyncMPClient(DPAsyncMPClient):
