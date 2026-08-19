@@ -41,22 +41,19 @@ def suspend_engine(
     engine_core: SnapshotEngine,
     model_save_path: str | None,
 ) -> None:
-    logger.info("[snapshot] [engine] start dump model")
-    engine_core.collective_rpc("dump_model", args=(model_save_path,))
+    logger.info("[snapshot] [engine] prepare workers for suspend")
+    engine_core.collective_rpc("snapshot_prepare_suspend", args=(model_save_path,))
 
     logger.info("[snapshot] [engine] gc.collect()")
     gc.collect()
 
-    logger.info("[snapshot] [engine] snapshot_process_lock")
-    engine_core.collective_rpc("snapshot_process_lock")
-
-    logger.info("[snapshot] [engine] snapshot_process_backup")
-    engine_core.collective_rpc("snapshot_process_backup")
+    logger.info("[snapshot] [engine] suspend workers")
+    engine_core.collective_rpc("snapshot_suspend")
 
 
 def unlock_engine(engine_core: SnapshotEngine) -> None:
-    logger.info("[snapshot] [engine] snapshot_process_unlock")
-    engine_core.collective_rpc("snapshot_process_unlock")
+    logger.info("[snapshot] [engine] unlock workers")
+    engine_core.collective_rpc("snapshot_unlock")
 
 
 def resume_engine(
@@ -64,27 +61,22 @@ def resume_engine(
     data_parallel_master_ip: str,
     model_path: str | None,
 ) -> None:
+    # TCP may already have been restored by the EngineCore metadata watcher;
+    # IPC reaches this same path and restores its transport here.
     with engine_core._transport_lock:
         if not engine_core._transport_restored:
             engine_core._reconnect_transport(data_parallel_master_ip)
+            engine_core._transport_restored = True
 
-    logger.info("[snapshot] [engine] snapshot_process_restore")
-    engine_core.collective_rpc("snapshot_process_restore")
-
-    logger.info("[snapshot] [engine] snapshot_process_unlock")
-    engine_core.collective_rpc("snapshot_process_unlock")
-
-    logger.info("[snapshot] [engine] update_worker_info_after_resume")
     local_ip = get_local_ip()
     parallel_config = engine_core.vllm_config.parallel_config
     parallel_config.data_parallel_master_ip = data_parallel_master_ip
+
+    logger.info("[snapshot] [engine] prepare workers for resume")
     engine_core.collective_rpc(
-        "update_worker_info_after_resume",
+        "snapshot_prepare_resume",
         args=(local_ip, data_parallel_master_ip),
     )
-
-    logger.info("[snapshot] [engine] rebuild_parallel_group_after_resume")
-    engine_core.collective_rpc("rebuild_parallel_group_after_resume")
 
     dp_group = getattr(engine_core, "dp_group", None)
     if dp_group is not None:
@@ -98,11 +90,8 @@ def resume_engine(
             "(data_parallel_size==1 or non-DPEngineCoreProc)"
         )
 
-    logger.info("[snapshot] [engine] re_load_weights")
-    engine_core.collective_rpc("re_load_weights", args=(model_path,))
-
-    logger.info("[snapshot] [engine] recapture_graph")
-    engine_core.collective_rpc("recapture_graph")
+    logger.info("[snapshot] [engine] restore worker model state")
+    engine_core.collective_rpc("snapshot_restore_model", args=(model_path,))
 
     logger.info("[snapshot] [engine] refresh scheduler KV state")
     refresh_scheduler_after_resume(engine_core, local_ip)
@@ -110,9 +99,9 @@ def resume_engine(
     kv_config = engine_core.vllm_config.kv_transfer_config
     new_engine_id = str(kv_config.engine_id) if kv_config is not None else None
 
-    logger.info("[snapshot] [engine] rebuild KV transfer engine")
+    logger.info("[snapshot] [engine] rebuild worker KV transfer state")
     engine_core.collective_rpc(
-        "rebuild_kv_transfer_engine_after_resume",
+        "snapshot_rebuild_kv_transfer",
         args=(local_ip, new_engine_id),
     )
 

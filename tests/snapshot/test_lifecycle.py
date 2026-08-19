@@ -28,7 +28,7 @@ def _engine(*, transport_restored: bool, dp_group=None):
     return engine
 
 
-def test_suspend_and_unlock_preserve_collective_rpc_order():
+def test_suspend_and_unlock_delegate_to_workers():
     engine = _engine(transport_restored=True)
 
     with patch("vllm.snapshot.lifecycle.gc.collect") as collect:
@@ -37,10 +37,9 @@ def test_suspend_and_unlock_preserve_collective_rpc_order():
 
     collect.assert_called_once_with()
     assert engine.collective_rpc.call_args_list == [
-        call("dump_model", args=("/snapshot/model",)),
-        call("snapshot_process_lock"),
-        call("snapshot_process_backup"),
-        call("snapshot_process_unlock"),
+        call("snapshot_prepare_suspend", args=("/snapshot/model",)),
+        call("snapshot_suspend"),
+        call("snapshot_unlock"),
     ]
 
 
@@ -58,21 +57,21 @@ def test_resume_reconnects_transport_before_worker_restore():
 
         assert engine.vllm_config.parallel_config.data_parallel_master_ip == "10.0.0.3"
         assert engine.collective_rpc.call_args_list == [
-            call("snapshot_process_restore"),
-            call("snapshot_process_unlock"),
             call(
-                "update_worker_info_after_resume",
+                "snapshot_prepare_resume",
                 args=("10.0.0.2", "10.0.0.3"),
             ),
-            call("rebuild_parallel_group_after_resume"),
-            call("re_load_weights", args=("/snapshot/model",)),
-            call("recapture_graph"),
             call(
-                "rebuild_kv_transfer_engine_after_resume",
+                "snapshot_restore_model",
+                args=("/snapshot/model",),
+            ),
+            call(
+                "snapshot_rebuild_kv_transfer",
                 args=("10.0.0.2", None),
             ),
         ]
     engine._reconnect_transport.assert_called_once_with("10.0.0.3")
+    assert engine._transport_restored
     refresh.assert_called_once_with(engine, "10.0.0.2")
     refresh_metadata.assert_called_once_with(engine)
 
