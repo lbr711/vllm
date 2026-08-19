@@ -321,12 +321,7 @@ def run_multi_api_server(args: argparse.Namespace):
         defer_api_server_ports=not (rust_frontend_path or is_ray_dp),
     )
 
-    with launch_core_engines(
-        vllm_config,
-        executor_class,
-        log_stats,
-        addresses,
-        num_api_servers,
+    with launch_core_engines(vllm_config, executor_class, log_stats, addresses, num_api_servers
     ) as (local_engine_manager, coordinator, addresses, tensor_queue):
         stats_update_address = (
             coordinator.get_stats_publish_address() if coordinator else None

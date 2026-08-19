@@ -108,13 +108,7 @@ _group_name_counter: dict[str, int] = {}
 
 
 def reset_group_name_registry() -> None:
-    """Reset the group name counter and stale group references.
-
-    Must be called before re-creating distributed groups (e.g. after
-    snapshot restore) so that newly created groups receive the same
-    unique names (``tp:0``, ``dp:0``, …) that torch.compiled graphs
-    have already baked in.
-    """
+    """Reset the group name counter and stale group references."""
     _group_name_counter.clear()
     _groups.clear()
 

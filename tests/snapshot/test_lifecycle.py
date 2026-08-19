@@ -9,7 +9,7 @@ from vllm.v1.engine.core import EngineCoreProc
 from vllm.v1.executor.abstract import Executor
 
 
-def _engine(*, transport_restored: bool, dp_group=None):
+def _engine(*, transport_reconnected: bool, dp_group=None):
     parallel_config = SimpleNamespace(
         data_parallel_master_ip="10.0.0.1",
         _data_parallel_master_port_list=[1234],
@@ -17,7 +17,7 @@ def _engine(*, transport_restored: bool, dp_group=None):
     )
     engine = SimpleNamespace(
         _transport_lock=nullcontext(),
-        _transport_restored=transport_restored,
+        _transport_reconnected=transport_reconnected,
         _reconnect_transport=Mock(),
         dp_group=dp_group,
         model_executor=Mock(),
@@ -30,7 +30,7 @@ def _engine(*, transport_restored: bool, dp_group=None):
 
 
 def test_suspend_and_unlock_delegate_to_model_executor():
-    engine = _engine(transport_restored=True)
+    engine = _engine(transport_reconnected=True)
 
     EngineCoreProc.suspend(engine, "/snapshot/model")
     EngineCoreProc.device_unlock(engine)
@@ -57,7 +57,7 @@ def test_model_executor_delegates_lifecycle_to_workers():
 
 
 def test_resume_reconnects_transport_before_worker_restore():
-    engine = _engine(transport_restored=False)
+    engine = _engine(transport_reconnected=False)
 
     with (
         patch("vllm.v1.engine.core.get_local_ip", return_value="10.0.0.2"),
@@ -76,13 +76,13 @@ def test_resume_reconnects_transport_before_worker_restore():
             None,
         )
     engine._reconnect_transport.assert_called_once_with("10.0.0.3")
-    assert engine._transport_restored
+    assert engine._transport_reconnected
     refresh.assert_called_once_with(engine, "10.0.0.2")
     refresh_metadata.assert_called_once_with(engine)
 
 
 def test_resume_rebuilds_engine_core_dp_group():
-    engine = _engine(transport_restored=True, dp_group="old-dp-group")
+    engine = _engine(transport_reconnected=True, dp_group="old-dp-group")
 
     with (
         patch(
@@ -95,5 +95,6 @@ def test_resume_rebuilds_engine_core_dp_group():
         EngineCoreProc.resume(engine, "10.0.0.3", None)
 
     destroy_dp_group.assert_called_once_with("old-dp-group")
+    engine._reconnect_transport.assert_not_called()
     assert engine.vllm_config.parallel_config._data_parallel_master_port_list == []
     assert engine.dp_group == "new-dp-group"

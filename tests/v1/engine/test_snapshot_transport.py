@@ -9,32 +9,12 @@ import zmq
 
 from vllm.snapshot.utils import RETRY_INTERVAL
 from vllm.v1.engine.core import EngineCoreProc
-from vllm.v1.engine.utils import EngineZmqAddresses
 
 
-def test_transport_reconnect_is_not_required_for_ipc_only():
-    addresses = EngineZmqAddresses(
-        inputs=["ipc:///tmp/input"],
-        outputs=["ipc:///tmp/output"],
-    )
-
-    assert not EngineCoreProc._transport_requires_reconnect(addresses)
-
-
-def test_transport_reconnect_is_required_for_tcp_coordinator():
-    addresses = EngineZmqAddresses(
-        inputs=["ipc:///tmp/input"],
-        outputs=["ipc:///tmp/output"],
-        coordinator_input="tcp://10.0.0.1:1234",
-    )
-
-    assert EngineCoreProc._transport_requires_reconnect(addresses)
-
-
-def test_transport_restore_retries_until_master_ip_is_available():
+def test_transport_reconnect_retries_until_master_ip_is_available():
     engine_core = object.__new__(EngineCoreProc)
     engine_core._transport_lock = threading.Lock()
-    engine_core._transport_restored = False
+    engine_core._transport_reconnected = False
     engine_core._reconnect_transport = Mock()
 
     with (
@@ -45,12 +25,14 @@ def test_transport_restore_retries_until_master_ip_is_available():
         ) as load_metadata,
         patch("vllm.v1.engine.core.time.sleep") as sleep,
     ):
-        engine_core._restore_transport_from_metadata("/snapshot/metadata.json")
+        engine_core._reconnect_transport_with_snapshot_metadata(
+            "/snapshot/metadata.json"
+        )
 
     assert load_metadata.call_count == 2
     sleep.assert_called_once_with(RETRY_INTERVAL)
     engine_core._reconnect_transport.assert_called_once_with("10.0.0.2")
-    assert engine_core._transport_restored
+    assert engine_core._transport_reconnected
 
 
 def test_stop_pipe_wakes_zmq_poller():

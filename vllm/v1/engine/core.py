@@ -139,7 +139,6 @@ class EngineCore:
 
         # Setup KV Caches and update CacheConfig after profiling.
         kv_cache_config = self._initialize_kv_caches(vllm_config)
-
         self.structured_output_manager = StructuredOutputManager(vllm_config)
 
         # Setup scheduler.
@@ -899,7 +898,7 @@ class EngineCoreProc(EngineCore):
         self.identity = identity
         self.dp_group: Any = None
         self._transport_lock = threading.Lock()
-        self._transport_restored = False
+        self._transport_reconnected = False
 
         # Receiver for tensor IPC
         self.tensor_ipc_receiver: TensorIpcReceiver | None = None
@@ -933,9 +932,6 @@ class EngineCoreProc(EngineCore):
             self.publish_dp_lb_stats = internal_dp_balancing
 
             self.addresses = addresses
-            self._transport_restored = not self._transport_requires_reconnect(
-                addresses
-            )
             self.process_input_queue_block = True
             if envs.VLLM_ELASTIC_EP_SCALE_UP_LAUNCH:
                 self._eep_send_engine_core_notification(
@@ -955,14 +951,12 @@ class EngineCoreProc(EngineCore):
             self._start_io_threads()
 
         snapshot_metadata = vllm_config.snapshot_config.snapshot_metadata
-        if snapshot_metadata is not None and any(
-            split_zmq_path(address)[0] == "tcp" for address in self.addresses.inputs
-        ):
+        if snapshot_metadata is not None and any(split_zmq_path(address)[0] == "tcp" for address in self.addresses.inputs):
             threading.Thread(
-                target=self._restore_transport_from_metadata,
+                target=self._reconnect_transport_with_snapshot_metadata,
                 args=(snapshot_metadata,),
                 daemon=True,
-                name="snapshot-transport",
+                name="reconnect-transport-worker",
             ).start()
 
     def _start_io_threads(self) -> None:
@@ -1027,17 +1021,6 @@ class EngineCoreProc(EngineCore):
         os.close(self._input_stop_reader)
         os.close(self._input_stop_writer)
 
-    @staticmethod
-    def _transport_requires_reconnect(addresses: EngineZmqAddresses) -> bool:
-        transport_addresses = [*addresses.inputs, *addresses.outputs]
-        if addresses.coordinator_input is not None:
-            transport_addresses.append(addresses.coordinator_input)
-        if addresses.coordinator_output is not None:
-            transport_addresses.append(addresses.coordinator_output)
-        return any(
-            split_zmq_path(address)[0] == "tcp" for address in transport_addresses
-        )
-
     def _reconnect_transport(self, data_parallel_master_ip: str) -> None:
         """Reconnect EngineCore sockets to the restored master Pod IP."""
         logger.info(
@@ -1075,7 +1058,7 @@ class EngineCoreProc(EngineCore):
             self.engine_index,
         )
 
-    def _restore_transport_from_metadata(self, snapshot_metadata: str) -> None:
+    def _reconnect_transport_with_snapshot_metadata(self, snapshot_metadata: str) -> None:
         try:
             from vllm.snapshot.utils import (
                 RETRY_INTERVAL,
@@ -1109,7 +1092,7 @@ class EngineCoreProc(EngineCore):
 
             with self._transport_lock:
                 self._reconnect_transport(data_parallel_master_ip)
-                self._transport_restored = True
+                self._transport_reconnected = True
         except Exception:
             logger.exception("[snapshot] engine core transport restore failed")
             self.shutdown_state = EngineShutdownState.REQUESTED
@@ -1867,9 +1850,9 @@ class EngineCoreProc(EngineCore):
     ) -> None:
         assert data_parallel_master_ip is not None
         with self._transport_lock:
-            if not self._transport_restored:
+            if not self._transport_reconnected:
                 self._reconnect_transport(data_parallel_master_ip)
-                self._transport_restored = True
+                self._transport_reconnected = True
 
         local_ip = get_local_ip()
         parallel_config = self.vllm_config.parallel_config
