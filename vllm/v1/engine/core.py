@@ -31,11 +31,12 @@ from vllm.logger import init_logger
 from vllm.logging_utils.dump_input import dump_engine_exception
 from vllm.lora.request import LoRARequest
 from vllm.multimodal import MULTIMODAL_REGISTRY
-from vllm.snapshot.kv_transfer import (
-    refresh_scheduler_after_resume,
-    refresh_scheduler_handshake_metadata_after_resume,
+from vllm.snapshot.lifecycle import (
+    resume_engine,
+    suspend_engine,
+    unlock_engine,
 )
-from vllm.snapshot.utils import get_local_ip, is_restore
+from vllm.snapshot.utils import is_restore
 from vllm.tasks import POOLING_TASKS, SupportedTask
 from vllm.tracing import instrument, maybe_init_worker_tracer
 from vllm.transformers_utils.config import maybe_register_config_serialize_by_value
@@ -1840,85 +1841,19 @@ class EngineCoreProc(EngineCore):
             for client_index, req_ids in by_client.items():
                 self._send_abort_outputs_to_client(list(req_ids), client_index)
 
-    def suspend(self, model_save_path=None):
-        logger.info(f"[snapshot] [engine] " + "-"*20 + "start dump model" + "-"*20)
-        self.collective_rpc("dump_model", args=(model_save_path, ))
-
-        logger.info(f"[snapshot] [engine] " + "-"*20 + "gc.collect()" + "-"*20)
-        gc.collect()
-
-        logger.info(f"[snapshot] [engine] " + "-"*20 + "aclrt_snapshot_process_lock" + "-"*20)
-        self.collective_rpc("aclrt_snapshot_process_lock")
-
-        logger.info(f"[snapshot] [engine] " + "-"*20 + "aclrt_snapshot_process_backup" + "-"*20)
-        self.collective_rpc("aclrt_snapshot_process_backup")
+    def suspend(self, model_save_path: str | None = None) -> None:
+        suspend_engine(self, model_save_path)
 
     def device_unlock(self) -> None:
-        logger.info(f"[snapshot] [engine] " + "-"*20 + "aclrt_snapshot_process_unlock" + "-"*20)
-        self.collective_rpc("aclrt_snapshot_process_unlock")
+        unlock_engine(self)
 
-    def resume(self, data_parallel_master_ip:str|None = None, model_path=None):
+    def resume(
+        self,
+        data_parallel_master_ip: str | None = None,
+        model_path: str | None = None,
+    ) -> None:
         assert data_parallel_master_ip is not None
-        with self._transport_lock:
-            if not self._transport_restored:
-                self._reconnect_transport(data_parallel_master_ip)
-
-        logger.info(f"[snapshot] [engine] " + "-"*20 + "aclrt_snapshot_process_restore" + "-"*20)
-        self.collective_rpc("aclrt_snapshot_process_restore")
-
-        logger.info(f"[snapshot] [engine] " + "-"*20 + "aclrt_snapshot_process_unlock" + "-"*20)
-        self.collective_rpc("aclrt_snapshot_process_unlock")
-
-        logger.info(f"[snapshot] [engine] " + "-"*20 + "update_worker_info_after_resume" + "-"*20)
-        local_ip = get_local_ip()
-        os.environ['HCCL_IF_IP'] = local_ip
-        self.vllm_config.parallel_config.data_parallel_master_ip = data_parallel_master_ip
-        self.collective_rpc(
-            "update_worker_info_after_resume",
-            args=(local_ip, data_parallel_master_ip),
-        )
-
-        logger.info(f"[snapshot] [engine] " + "-"*20 + "rebuild_parallel_group_after_resume" + "-"*20)
-        self.collective_rpc("rebuild_parallel_group_after_resume")
-
-        # Stateless DP process group exists only for DPEngineCoreProc (DP>1).
-        dp_group = getattr(self, "dp_group", None)
-        if dp_group is not None:
-            logger.info(
-                f"[snapshot] [engine] " + "-" * 20 + "rebuild engie core dp_group" + "-" * 20
-            )
-            stateless_destroy_torch_distributed_process_group(dp_group)
-            # all EngineCore-DP falls to preserved data_parallel_master_port (P0 in list)
-            self.vllm_config.parallel_config._data_parallel_master_port_list.clear()
-            self.dp_group = self.vllm_config.parallel_config.stateless_init_dp_group()
-        else:
-            logger.info(
-                "[snapshot] [engine] skip engine-core dp_group rebuild "
-                "(data_parallel_size==1 or non-DPEngineCoreProc)"
-            )
-
-        logger.info(f"[snapshot] [engine] " + "-"*20 + "re_load_weights" + "-"*20)
-        self.collective_rpc("re_load_weights", args=(model_path, ))
-
-        logger.info(f"[snapshot] [engine] " + "-"*20 + "recapture_graph" + "-"*20)
-        self.collective_rpc("recapture_graph")
-
-        # Refresh scheduler-side KV state before worker rebuild so the rotated
-        # engine_id is available when rebinding KV transfer endpoints.
-        logger.info(f"[snapshot] [engine] " + "-" * 20 + "snapshot_refresh_scheduler_after_resume" + "-" * 20)
-        refresh_scheduler_after_resume(self, local_ip)
-
-        kv_cfg = self.vllm_config.kv_transfer_config
-        new_engine_id = str(kv_cfg.engine_id) if kv_cfg is not None else None
-
-        # Refresh worker side_channel_host to new pod IP (only for PD separate scenario).
-        logger.info(f"[snapshot] [engine] " + "-" * 20 + "rebuild_kv_transfer_engine_after_resume" + "-" * 20)
-        self.collective_rpc("rebuild_kv_transfer_engine_after_resume", args=(local_ip, new_engine_id))
-
-        # Re-collect rebuilt worker metadata so scheduler-side per-rank endpoint
-        # mappings do not keep pre-snapshot addresses.
-        logger.info(f"[snapshot] [engine] " + "-" * 20 + "refresh_scheduler_handshake_metadata_after_resume" + "-" * 20)
-        refresh_scheduler_handshake_metadata_after_resume(self)
+        resume_engine(self, data_parallel_master_ip, model_path)
 
 
 class DPEngineCoreProc(EngineCoreProc):
