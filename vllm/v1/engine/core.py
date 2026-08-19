@@ -1672,12 +1672,7 @@ class EngineCoreProc(EngineCore):
             input_sockets = [
                 stack.enter_context(
                     make_zmq_socket(
-                        ctx,
-                        input_address,
-                        zmq.DEALER,
-                        identity=identity,
-                        bind=False,
-                        linger=0,
+                        ctx, input_address, zmq.DEALER, identity=identity, bind=False
                     )
                 )
                 for input_address in input_addresses
@@ -1692,7 +1687,6 @@ class EngineCoreProc(EngineCore):
                         zmq.XSUB,
                         identity=identity,
                         bind=False,
-                        linger=0,
                     )
                 )
                 # Send subscription message to coordinator.
