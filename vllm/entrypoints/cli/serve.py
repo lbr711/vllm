@@ -346,7 +346,7 @@ def run_multi_api_server(args: argparse.Namespace):
                 stats_update_address=stats_update_address,
             )
         else:
-            from vllm.entrypoints.serve.snapshot.monitor import SnapshotMonitor
+            from vllm.snapshot.monitor import SnapshotMonitor
 
             # All API workers must observe the same lifecycle state. Create the
             # synchronization primitives from the same spawn context used by

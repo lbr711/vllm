@@ -24,9 +24,9 @@ import zmq.asyncio
 
 from vllm.config import VllmConfig
 from vllm.envs import VLLM_ENGINE_READY_TIMEOUT_S
-from vllm.entrypoints.serve.snapshot.utils import is_restore
 from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
+from vllm.snapshot.utils import is_restore
 from vllm.tasks import SupportedTask
 from vllm.tracing import instrument
 from vllm.utils.async_utils import in_loop

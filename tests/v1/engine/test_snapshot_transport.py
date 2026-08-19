@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 import zmq
 
-from vllm.entrypoints.serve.snapshot.utils import RETRY_INTERVAL
+from vllm.snapshot.utils import RETRY_INTERVAL
 from vllm.v1.engine.core import EngineCoreProc
 
 
@@ -20,7 +20,7 @@ def test_transport_restore_retries_until_master_ip_is_available():
     with (
         patch("vllm.v1.engine.core.is_restore", return_value=True),
         patch(
-            "vllm.entrypoints.serve.snapshot.utils.load_snapshot_metadata",
+            "vllm.snapshot.utils.load_snapshot_metadata",
             side_effect=[ValueError("field is not ready"), "10.0.0.2"],
         ) as load_metadata,
         patch("vllm.v1.engine.core.time.sleep") as sleep,

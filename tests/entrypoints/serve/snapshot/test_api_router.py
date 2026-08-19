@@ -6,16 +6,17 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 
+from vllm.config import SnapshotConfig
 from vllm.entrypoints.serve.snapshot.api_router import (
+    attach_router,
     resume,
     router,
     snapshot_health,
     suspend,
 )
-from vllm.entrypoints.serve.snapshot.config import SnapshotConfig
-from vllm.entrypoints.serve.snapshot.monitor import SnapshotMonitor
+from vllm.snapshot.monitor import SnapshotMonitor
 from vllm.v1.engine.core_client import AsyncMPClient
 from vllm.v1.engine.exceptions import EngineDeadError
 
@@ -58,11 +59,28 @@ def test_snapshot_router_owns_lifecycle_endpoints():
     paths = {route.path for route in router.routes}
 
     assert paths == {
-        "/snapshot/health",
         "/suspend",
         "/resume",
         "/device_unlock",
     }
+
+
+@pytest.mark.parametrize("enable_auto_checkpoint", [False, True])
+def test_snapshot_health_route_requires_auto_checkpoint(enable_auto_checkpoint):
+    app = FastAPI()
+    app.state.args = SimpleNamespace(
+        snapshot_config=SnapshotConfig(
+            snapshot_metadata=(
+                "/snapshot/metadata.json" if enable_auto_checkpoint else None
+            ),
+            enable_auto_checkpoint=enable_auto_checkpoint,
+        )
+    )
+
+    attach_router(app)
+
+    paths = {route.path for route in app.routes}
+    assert ("/snapshot/health" in paths) is enable_auto_checkpoint
 
 
 def test_snapshot_monitor_tracks_shared_client_state():

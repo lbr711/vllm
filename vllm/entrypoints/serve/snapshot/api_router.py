@@ -7,12 +7,12 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import Response
 
 from vllm.engine.protocol import EngineClient
+from vllm.snapshot.monitor import SnapshotMonitor
+from vllm.snapshot.utils import is_restore
 from vllm.v1.engine.exceptions import EngineDeadError
 
-from .monitor import SnapshotMonitor
-from .utils import is_restore
-
 router = APIRouter()
+health_router = APIRouter()
 
 
 def engine_client(request: Request) -> EngineClient:
@@ -46,7 +46,7 @@ def ensure_snapshot_metadata_for_remote_dp(request: Request) -> None:
         )
 
 
-@router.get("/snapshot/health", response_class=Response)
+@health_router.get("/snapshot/health", response_class=Response)
 async def snapshot_health(raw_request: Request) -> Response:
     try:
         await engine_client(raw_request).check_health()
@@ -101,3 +101,5 @@ async def device_unlock(raw_request: Request) -> Response:
 
 def attach_router(app: FastAPI) -> None:
     app.include_router(router)
+    if app.state.args.snapshot_config.enable_auto_checkpoint:
+        app.include_router(health_router)

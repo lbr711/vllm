@@ -682,7 +682,7 @@ async def run_server_worker(
     """Run a single API server worker."""
 
     client_config = dict(client_config) if client_config else {}
-    from vllm.entrypoints.serve.snapshot.monitor import SnapshotMonitor
+    from vllm.snapshot.monitor import SnapshotMonitor
 
     # vllm serve injects one process-shared monitor into every API worker. A
     # directly launched single worker has no parent-provided monitor and only

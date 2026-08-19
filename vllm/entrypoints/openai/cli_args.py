@@ -14,14 +14,13 @@ from dataclasses import field
 from typing import Any, Literal
 
 import vllm.envs as envs
-from vllm.config import config
+from vllm.config import SnapshotConfig, config
 from vllm.engine.arg_utils import AsyncEngineArgs, optional_type
 from vllm.entrypoints.chat_utils import (
     ChatTemplateContentFormatOption,
     validate_chat_template,
 )
 from vllm.entrypoints.openai.models.protocol import LoRAModulePath
-from vllm.entrypoints.serve.snapshot.config import SnapshotConfig
 from vllm.entrypoints.serve.utils.constants import (
     H11_MAX_HEADER_COUNT_DEFAULT,
     H11_MAX_INCOMPLETE_EVENT_SIZE_DEFAULT,

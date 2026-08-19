@@ -7,7 +7,7 @@ import requests
 
 from vllm.logger import init_logger
 
-from .utils import (
+from vllm.snapshot.utils import (
     RETRY_INTERVAL,
     RETRY_LOG_FREQUENCY,
     get_local_ip,
