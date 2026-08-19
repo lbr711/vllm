@@ -26,6 +26,7 @@ from vllm.config import VllmConfig
 from vllm.envs import VLLM_ENGINE_READY_TIMEOUT_S
 from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
+from vllm.snapshot.monitor import SnapshotMonitor
 from vllm.snapshot.utils import is_restore
 from vllm.tasks import SupportedTask
 from vllm.tracing import instrument
@@ -491,13 +492,6 @@ class MPClient(EngineCoreClient):
         * SyncMPClient subclass for LLM usage
     """
 
-    is_suspending: bool
-    is_unlocking: bool
-    is_resuming: bool
-    suspend_done: bool
-    unlock_done: bool
-    resume_done: bool
-
     def __init__(
         self,
         asyncio_mode: bool,
@@ -531,17 +525,14 @@ class MPClient(EngineCoreClient):
             enable_input_socket_handover = True
 
             self.stats_update_address: str | None = None
-            # API workers receive a process-shared monitor from their parent.
-            # Other EngineCoreClient users retain the local lifecycle fields.
-            self.snapshot_monitor = (
+            # API workers receive a process-shared monitor from their parent;
+            # direct clients use the same state machine with local primitives.
+            snapshot_monitor = (
                 client_addresses.get("snapshot_monitor") if client_addresses else None
             )
-            self.is_suspending = False
-            self.is_unlocking = False
-            self.is_resuming = False
-            self.suspend_done = False
-            self.unlock_done = False
-            self.resume_done = False
+            self.snapshot_monitor = (
+                snapshot_monitor if snapshot_monitor is not None else SnapshotMonitor()
+            )
             tensor_queue: Queue | None = None
             if client_addresses and "input_address" in client_addresses:
                 # Engines are managed externally to this client.
@@ -724,89 +715,6 @@ class MPClient(EngineCoreClient):
 
     def dp_engines_running(self) -> bool:
         return self.engines_running
-
-    # Keep lifecycle transitions in the shared monitor when one is supplied by
-    # vllm serve. Direct/offline clients use the equivalent per-client fields.
-    def _snapshot_is_suspend_done(self) -> bool:
-        return (
-            self.snapshot_monitor.is_suspend_done
-            if self.snapshot_monitor is not None
-            else self.suspend_done
-        )
-
-    def _snapshot_try_start_suspending(self) -> bool:
-        if self.snapshot_monitor is not None:
-            return self.snapshot_monitor.try_start_suspending()
-        if self.is_suspending or self.suspend_done:
-            return False
-        self.is_suspending = True
-        return True
-
-    def _snapshot_mark_suspend_done(self) -> None:
-        if self.snapshot_monitor is not None:
-            self.snapshot_monitor.mark_suspend_done()
-        else:
-            self.suspend_done = True
-            self.is_suspending = False
-
-    def _snapshot_mark_suspend_failed(self) -> None:
-        if self.snapshot_monitor is not None:
-            self.snapshot_monitor.mark_suspend_failed()
-        else:
-            self.is_suspending = False
-
-    def _snapshot_try_start_unlocking(self) -> bool:
-        if self.snapshot_monitor is not None:
-            return self.snapshot_monitor.try_start_unlocking()
-        if (
-            not self.suspend_done
-            or self.is_unlocking
-            or self.unlock_done
-            or self.is_resuming
-            or self.resume_done
-        ):
-            return False
-        self.is_unlocking = True
-        return True
-
-    def _snapshot_mark_unlock_done(self) -> None:
-        if self.snapshot_monitor is not None:
-            self.snapshot_monitor.mark_unlock_done()
-        else:
-            self.unlock_done = True
-            self.is_unlocking = False
-
-    def _snapshot_mark_unlock_failed(self) -> None:
-        if self.snapshot_monitor is not None:
-            self.snapshot_monitor.mark_unlock_failed()
-        else:
-            self.is_unlocking = False
-
-    def _snapshot_try_start_resuming(self) -> bool:
-        if self.snapshot_monitor is not None:
-            return self.snapshot_monitor.try_start_resuming()
-        if (
-            not self.suspend_done
-            or self.is_unlocking
-            or self.is_resuming
-            or self.resume_done
-        ):
-            return False
-        self.is_resuming = True
-        return True
-
-    def _snapshot_mark_resume_done(self) -> None:
-        if self.snapshot_monitor is not None:
-            self.snapshot_monitor.mark_resume_done()
-        else:
-            self.resume_done = True
-            self.is_resuming = False
-
-    def _snapshot_mark_resume_failed(self) -> None:
-        if self.snapshot_monitor is not None:
-            self.snapshot_monitor.mark_resume_failed()
-        else:
-            self.is_resuming = False
 
     def start_engine_core_monitor(self):
         """Start a monitor thread for engine core processes."""
@@ -1297,7 +1205,7 @@ class AsyncMPClient(MPClient):
         logger.info("[snapshot] api server wait for all engines ready!")
 
     async def suspend_async(self, model_save_path: str | None = None) -> None:
-        if not self._snapshot_try_start_suspending():
+        if not self.snapshot_monitor.try_start_suspending():
             logger.warning("[snapshot] api server is suspending or already suspended.")
             return
 
@@ -1305,9 +1213,9 @@ class AsyncMPClient(MPClient):
         try:
             await self.call_utility_async("suspend", model_save_path)
         except BaseException:
-            self._snapshot_mark_suspend_failed()
+            self.snapshot_monitor.mark_suspend_failed()
             raise
-        self._snapshot_mark_suspend_done()
+        self.snapshot_monitor.mark_suspend_done()
         time_after_suspend = time.perf_counter()
         logger.info(
             "It took %.6f seconds to fall suspend.",
@@ -1315,7 +1223,7 @@ class AsyncMPClient(MPClient):
         )
 
     async def device_unlock_async(self) -> None:
-        if not self._snapshot_try_start_unlocking():
+        if not self.snapshot_monitor.try_start_unlocking():
             logger.warning(
                 "[snapshot] api server cannot unlock or is already unlocking."
             )
@@ -1325,9 +1233,9 @@ class AsyncMPClient(MPClient):
         try:
             await self.call_utility_async("device_unlock")
         except BaseException:
-            self._snapshot_mark_unlock_failed()
+            self.snapshot_monitor.mark_unlock_failed()
             raise
-        self._snapshot_mark_unlock_done()
+        self.snapshot_monitor.mark_unlock_done()
         time_after_unlock = time.perf_counter()
         logger.info(
             "It took %.6f seconds to device_unlock.",
@@ -1361,14 +1269,14 @@ class AsyncMPClient(MPClient):
         data_parallel_master_ip: str | None = None,
         model_path: str | None = None,
     ) -> None:
-        if not self._snapshot_is_suspend_done():
+        if not self.snapshot_monitor.is_suspend_done:
             logger.warning("[snapshot] api server is not suspend.")
             return
-        if not self._snapshot_try_start_resuming():
+        if not self.snapshot_monitor.try_start_resuming():
             logger.warning("[snapshot] api server is resuming or already resumed.")
             return
         if not is_restore():
-            self._snapshot_mark_resume_failed()
+            self.snapshot_monitor.mark_resume_failed()
             logger.warning(
                 "[snapshot] api server resume fail, not find /root/.grusflag"
             )
@@ -1380,9 +1288,9 @@ class AsyncMPClient(MPClient):
             await self._prepare_snapshot_resume(data_parallel_master_ip)
             await self._resume_engines(data_parallel_master_ip, model_path)
         except BaseException:
-            self._snapshot_mark_resume_failed()
+            self.snapshot_monitor.mark_resume_failed()
             raise
-        self._snapshot_mark_resume_done()
+        self.snapshot_monitor.mark_resume_done()
         time_after_resume = time.perf_counter()
         logger.info(
             "It took %.6f seconds to resume.",
