@@ -550,18 +550,7 @@ class ParallelConfig:
         if self._snapshot_data_parallel_port_list is not None:
             return
 
-        excluded_ports = set(self._data_parallel_master_port_list)
-        excluded_ports.update(
-            (
-                self.data_parallel_master_port,
-                self.data_parallel_rpc_port,
-                self.master_port,
-            )
-        )
-        if self._coord_store_port:
-            excluded_ports.add(self._coord_store_port)
-        ports = get_open_ports_list(2, exclude_ports=excluded_ports)
-        self._snapshot_data_parallel_port_list = ports
+        self._snapshot_data_parallel_port_list = get_open_ports_list(2)
 
     def _pick_stateless_dp_port(self) -> tuple[int, socket.socket | None]:
         """Return ``(port, listen_socket)`` for DP group init.
