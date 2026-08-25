@@ -115,6 +115,26 @@ from .utils import (
 logger = init_logger(__name__)
 
 
+def _snapshot_debug_tensor_fingerprint(tensor: torch.Tensor) -> torch.Tensor:
+    """Build a compact device-side fingerprint for snapshot debugging."""
+    values = tensor.reshape(-1).float()
+    return torch.cat(
+        (
+            torch.stack(
+                (
+                    values.min(),
+                    values.max(),
+                    values.mean(),
+                    torch.linalg.vector_norm(values),
+                    values.sum(),
+                    values.abs().sum(),
+                )
+            ),
+            values[:16],
+        )
+    )
+
+
 class DeepseekAttention(nn.Module):
     """Normal MHA implementation used by Deepseek v1."""
 
@@ -1165,6 +1185,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             config.hidden_size, eps=config.rms_norm_eps
         )
         self.routed_scaling_factor = getattr(config, "routed_scaling_factor", 1.0)
+        self.snapshot_debug_hidden_states = False
 
     def forward(
         self,
@@ -1187,6 +1208,10 @@ class DeepseekV2DecoderLayer(nn.Module):
         if not self.use_mha:
             attn_kwargs["llama_4_scaling"] = llama_4_scaling
         hidden_states = self.self_attn(**attn_kwargs)
+        if self.snapshot_debug_hidden_states:
+            attention_fingerprint = _snapshot_debug_tensor_fingerprint(
+                hidden_states + residual
+            )
 
         if (
             not isinstance(self.self_attn, DeepseekAttention)
@@ -1213,6 +1238,16 @@ class DeepseekV2DecoderLayer(nn.Module):
             # of DeepseekV2MOE
             hidden_states *= 1.0 / self.routed_scaling_factor
 
+        if self.snapshot_debug_hidden_states:
+            output_fingerprint = _snapshot_debug_tensor_fingerprint(
+                hidden_states + residual
+            )
+            return (
+                hidden_states,
+                residual,
+                attention_fingerprint,
+                output_fingerprint,
+            )
         return hidden_states, residual
 
 
@@ -1269,6 +1304,9 @@ class DeepseekV2Model(nn.Module):
         )
 
         self.aux_hidden_state_layers = tuple[int, ...]()
+        # Set by the Ascend model runner only for snapshot diagnosis. Keeping
+        # the fingerprints on device avoids a synchronization at every layer.
+        self.snapshot_debug_hidden_states = False
 
         # Needed by load_weights
         qk_nope_head_dim = getattr(config, "qk_nope_head_dim", 0)
@@ -1306,6 +1344,15 @@ class DeepseekV2Model(nn.Module):
             hidden_states = intermediate_tensors["hidden_states"]
             residual = intermediate_tensors["residual"]
 
+        snapshot_debug_fingerprints = []
+        if self.snapshot_debug_hidden_states:
+            logical_hidden_states = (
+                hidden_states if residual is None else hidden_states + residual
+            )
+            snapshot_debug_fingerprints.append(
+                _snapshot_debug_tensor_fingerprint(logical_hidden_states)
+            )
+
         # Compute llama 4 scaling once per forward pass if enabled
         llama_4_scaling_config = getattr(self.config, "llama_4_scaling", None)
         llama_4_scaling: torch.Tensor | None
@@ -1327,9 +1374,19 @@ class DeepseekV2Model(nn.Module):
         ):
             if idx in self.aux_hidden_state_layers:
                 aux_hidden_states.append(hidden_states + residual)
-            hidden_states, residual = layer(
-                positions, hidden_states, residual, llama_4_scaling
-            )
+            layer_output = layer(positions, hidden_states, residual, llama_4_scaling)
+            if self.snapshot_debug_hidden_states:
+                (
+                    hidden_states,
+                    residual,
+                    attention_fingerprint,
+                    output_fingerprint,
+                ) = layer_output
+                snapshot_debug_fingerprints.extend(
+                    (attention_fingerprint, output_fingerprint)
+                )
+            else:
+                hidden_states, residual = layer_output
 
         if not get_pp_group().is_last_rank:
             return IntermediateTensors(
@@ -1337,6 +1394,11 @@ class DeepseekV2Model(nn.Module):
             )
 
         hidden_states, _ = self.norm(hidden_states, residual)
+        if self.snapshot_debug_hidden_states:
+            snapshot_debug_fingerprints.append(
+                _snapshot_debug_tensor_fingerprint(hidden_states)
+            )
+            return hidden_states, torch.stack(snapshot_debug_fingerprints)
         if len(aux_hidden_states) > 0:
             return hidden_states, aux_hidden_states
         return hidden_states
