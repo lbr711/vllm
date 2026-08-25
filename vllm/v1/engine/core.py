@@ -1951,6 +1951,18 @@ class DPEngineCoreProc(EngineCoreProc):
         dp_group, dp_store = parallel_config.stateless_init_dp_group(return_store=True)
         self.dp_group, self.dp_store = dp_group, dp_store
 
+        if vllm_config.snapshot_config is not None:
+            key = "snapshot_resume_ports"
+            if dp_rank == 0:
+                ports = parallel_config._snapshot_data_parallel_port_list
+                assert ports is not None and len(ports) == 2
+                dp_store.set(key, ",".join(map(str, ports)).encode())
+            else:
+                ports = dp_store.get(key).decode().split(",")
+                parallel_config._snapshot_data_parallel_port_list = list(
+                    map(int, ports)
+                )
+
     def shutdown(self):
         super().shutdown()
         if dp_group := getattr(self, "dp_group", None):

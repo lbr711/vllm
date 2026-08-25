@@ -167,23 +167,29 @@ def get_open_port() -> int:
     return _get_open_port()
 
 
-def get_open_ports_list(count: int = 5) -> list[int]:
+def get_open_ports_list(
+    count: int = 5, exclude_ports: set[int] | None = None
+) -> list[int]:
     """Get a list of unique open ports.
 
     When VLLM_PORT is set, scans upward from that port, advancing
     the start position after each find so every port is unique.
     """
+    exclude_ports = exclude_ports or set()
     ports_set = set[int]()
     if envs.VLLM_PORT is not None:
         next_port = envs.VLLM_PORT
-        for _ in range(count):
+        while len(ports_set) < count:
             port = _get_open_port(start_port=next_port, max_attempts=1000)
-            ports_set.add(port)
             next_port = port + 1
+            if port not in exclude_ports:
+                ports_set.add(port)
         return list(ports_set)
     else:
         while len(ports_set) < count:
-            ports_set.add(get_open_port())
+            port = get_open_port()
+            if port not in exclude_ports:
+                ports_set.add(port)
 
     return list(ports_set)
 

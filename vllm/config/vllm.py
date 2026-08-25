@@ -858,6 +858,9 @@ class VllmConfig:
 
         self.try_verify_and_update_config()
 
+        if self.snapshot_config is not None:
+            self.parallel_config.reserve_snapshot_ports()
+
         if self.model_config is not None:
             self.model_config.verify_with_parallel_config(self.parallel_config)
             self.model_config.verify_dual_chunk_attention_config(self.load_config)
