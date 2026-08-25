@@ -4,12 +4,14 @@
 import json
 import os
 
-RESTORED_FLAG_PATH = "/root/.grusflag"
+from vllm.platforms import current_platform
+
 RETRY_INTERVAL = 1.0
 RETRY_LOG_FREQUENCY = 60
 
+
 def is_restore() -> bool:
-    return os.path.exists(RESTORED_FLAG_PATH)
+    return current_platform.is_restore()
 
 
 def load_snapshot_metadata(file_path: str, field_name: str) -> str:
