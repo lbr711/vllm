@@ -64,9 +64,6 @@ def get_ip(*, force: bool = False) -> str:
     except Exception:
         pass
 
-    if force:
-        raise RuntimeError("Failed to detect the current local IP address")
-
     warnings.warn(
         "Failed to get the IP address, using 0.0.0.0 by default. "
         "The value can be set by the environment variable"

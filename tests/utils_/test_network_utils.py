@@ -56,15 +56,15 @@ def test_get_ip_force_falls_back_to_ipv6():
     ]
 
 
-def test_get_ip_force_raises_when_probe_fails():
+def test_get_ip_force_uses_default_when_probe_fails():
     with (
         patch(
             "vllm.utils.network_utils.socket.socket",
             side_effect=[OSError(), OSError()],
         ),
-        pytest.raises(RuntimeError, match="current local IP"),
+        pytest.warns(UserWarning, match="using 0.0.0.0 by default"),
     ):
-        get_ip(force=True)
+        assert get_ip(force=True) == "0.0.0.0"
 
 
 def test_get_open_port(monkeypatch: pytest.MonkeyPatch):
