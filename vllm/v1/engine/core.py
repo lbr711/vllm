@@ -1880,7 +1880,6 @@ class EngineCoreProc(EngineCore):
 
         if self.dp_group is not None:
             stateless_destroy_torch_distributed_process_group(self.dp_group)
-            parallel_config._data_parallel_master_port_list.clear()
             self.dp_group = parallel_config.stateless_init_dp_group()
         
         # Must after worker rebuild

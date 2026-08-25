@@ -96,7 +96,7 @@ def test_resume_rebuilds_engine_core_dp_group():
 
     destroy_dp_group.assert_called_once_with("old-dp-group")
     engine._reconnect_transport.assert_not_called()
-    assert engine.vllm_config.parallel_config._data_parallel_master_port_list == []
+    assert engine.vllm_config.parallel_config._data_parallel_master_port_list == [1234]
     assert engine.dp_group == "new-dp-group"
 
 
