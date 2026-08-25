@@ -1173,15 +1173,9 @@ class GroupCoordinator:
             raise ValueError("No device communicator found")
         return self.device_communicator.recv(size, dtype, src)
 
-    def destroy(
-        self,
-        device_group_destroyer: Callable[[ProcessGroup], None] | None = None,
-    ) -> None:
+    def destroy(self):
         if hasattr(self, "device_group"):
-            if device_group_destroyer is None:
-                torch.distributed.destroy_process_group(self.device_group)
-            else:
-                device_group_destroyer(self.device_group)
+            torch.distributed.destroy_process_group(self.device_group)
             del self.device_group
         if hasattr(self, "cpu_group"):
             torch.distributed.destroy_process_group(self.cpu_group)
@@ -2017,53 +2011,49 @@ def get_node_count() -> int:
     return _NODE_COUNT
 
 
-def destroy_model_parallel(
-    device_group_destroyer: Callable[[ProcessGroup], None] | None = None,
-) -> None:
+def destroy_model_parallel():
     """Set the groups to none and destroy them."""
     global _TP
 
     if _TP:
-        _TP.destroy(device_group_destroyer)
+        _TP.destroy()
     _TP = None
 
     global _DCP
     if _DCP:
-        _DCP.destroy(device_group_destroyer)
+        _DCP.destroy()
     _DCP = None
 
     global _PCP
     if _PCP:
-        _PCP.destroy(device_group_destroyer)
+        _PCP.destroy()
     _PCP = None
 
     global _PP
     if _PP:
-        _PP.destroy(device_group_destroyer)
+        _PP.destroy()
     _PP = None
 
     global _DP
     if _DP:
-        _DP.destroy(device_group_destroyer)
+        _DP.destroy()
     _DP = None
 
     global _EP
     if _EP:
-        _EP.destroy(device_group_destroyer)
+        _EP.destroy()
     _EP = None
 
     global _EPLB
     if _EPLB:
-        _EPLB.destroy(device_group_destroyer)
+        _EPLB.destroy()
     _EPLB = None
 
 
-def destroy_distributed_environment(
-    device_group_destroyer: Callable[[ProcessGroup], None] | None = None,
-) -> None:
+def destroy_distributed_environment():
     global _WORLD, _NODE_COUNT
     if _WORLD:
-        _WORLD.destroy(device_group_destroyer)
+        _WORLD.destroy()
     _WORLD = None
     _NODE_COUNT = None
     if torch.distributed.is_initialized():

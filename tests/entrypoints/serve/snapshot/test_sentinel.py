@@ -32,13 +32,13 @@ def test_suspend_uses_snapshot_metadata(tmp_path):
     with (
         patch.object(sentinel, "_request") as request,
         patch(
-            "vllm.entrypoints.serve.snapshot.sentinel.get_local_ip",
+            "vllm.entrypoints.serve.snapshot.sentinel.get_ip",
             return_value="10.0.0.1",
-        ) as get_local_ip,
+        ) as get_ip,
     ):
         sentinel._call_suspend()
 
-    get_local_ip.assert_called_once_with()
+    get_ip.assert_called_once_with(force=True)
     request.assert_called_once_with(
         "POST",
         "/suspend",
@@ -60,7 +60,7 @@ def test_checkpoint_unlocks_device_and_stops_on_cold_start(tmp_path):
             return_value=False,
         ),
         patch(
-            "vllm.entrypoints.serve.snapshot.sentinel.get_local_ip",
+            "vllm.entrypoints.serve.snapshot.sentinel.get_ip",
             return_value="10.0.0.1",
         ),
     ):
@@ -88,13 +88,13 @@ def test_resume_uses_snapshot_metadata(tmp_path):
     with (
         patch.object(sentinel, "_request") as request,
         patch(
-            "vllm.entrypoints.serve.snapshot.sentinel.get_local_ip",
+            "vllm.entrypoints.serve.snapshot.sentinel.get_ip",
             return_value="10.0.0.2",
-        ) as get_local_ip,
+        ) as get_ip,
     ):
         sentinel._call_resume()
 
-    get_local_ip.assert_called_once_with()
+    get_ip.assert_called_once_with(force=True)
     request.assert_called_once_with(
         "POST",
         "/resume",
