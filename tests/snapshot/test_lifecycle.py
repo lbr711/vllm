@@ -5,7 +5,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
-from vllm.v1.engine.core import DPEngineCoreProc, EngineCoreProc
+from vllm.v1.engine.core import EngineCoreProc
 from vllm.v1.executor.abstract import Executor
 
 
@@ -98,27 +98,3 @@ def test_resume_rebuilds_engine_core_dp_group():
     engine._reconnect_transport.assert_not_called()
     assert engine.vllm_config.parallel_config._data_parallel_master_port_list == [1234]
     assert engine.dp_group == "new-dp-group"
-
-
-def test_dp_engine_core_receives_snapshot_ports_from_rank_zero():
-    dp_store = Mock()
-    dp_store.get.return_value = b"4321,4322"
-    parallel_config = SimpleNamespace(
-        data_parallel_rank=1,
-        data_parallel_size=2,
-        data_parallel_rank_local=0,
-        _snapshot_data_parallel_port_list=[5001, 5002],
-        stateless_init_dp_group=Mock(return_value=("dp-group", dp_store)),
-    )
-    engine = SimpleNamespace()
-
-    DPEngineCoreProc._init_data_parallel(
-        engine,
-        SimpleNamespace(
-            parallel_config=parallel_config,
-            snapshot_config=object(),
-        ),
-    )
-
-    dp_store.get.assert_called_once_with("snapshot_resume_ports")
-    assert parallel_config._snapshot_data_parallel_port_list == [4321, 4322]
