@@ -1863,6 +1863,9 @@ class EngineCoreProc(EngineCore):
                 self._transport_reconnected = True
 
         local_ip = get_local_ip()
+
+        refresh_scheduler_after_resume(self, local_ip)
+
         parallel_config = self.vllm_config.parallel_config
         parallel_config.data_parallel_master_ip = data_parallel_master_ip
         kv_config = self.vllm_config.kv_transfer_config
@@ -1878,10 +1881,9 @@ class EngineCoreProc(EngineCore):
             stateless_destroy_torch_distributed_process_group(self.dp_group)
             parallel_config._data_parallel_master_port_list.clear()
             self.dp_group = parallel_config.stateless_init_dp_group()
-
-        refresh_scheduler_after_resume(self, local_ip)
+        
+        # Must after worker rebuild
         refresh_scheduler_handshake_metadata_after_resume(self)
-
 
 class DPEngineCoreProc(EngineCoreProc):
     """ZMQ-wrapper for running EngineCore in background process
