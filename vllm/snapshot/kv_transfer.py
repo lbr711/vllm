@@ -45,10 +45,9 @@ def refresh_scheduler_after_resume(
     connector_scheduler = (
         getattr(connector, "connector_scheduler", None) if connector else None
     )
-    if connector_scheduler is None:
-        return
-
-    if hasattr(connector_scheduler, "side_channel_host"):
+    if connector_scheduler is not None and hasattr(
+        connector_scheduler, "side_channel_host"
+    ):
         old_host = connector_scheduler.side_channel_host
         connector_scheduler.side_channel_host = local_ip
         logger.info(
@@ -57,7 +56,7 @@ def refresh_scheduler_after_resume(
             local_ip,
         )
 
-    if hasattr(connector_scheduler, "engine_id"):
+    if connector_scheduler is not None and hasattr(connector_scheduler, "engine_id"):
         old_engine_id = str(connector_scheduler.engine_id)
         new_engine_id = rotate_engine_id(old_engine_id)
         connector_scheduler.engine_id = new_engine_id
@@ -69,6 +68,13 @@ def refresh_scheduler_after_resume(
             old_engine_id,
             new_engine_id,
         )
+
+    rebuild = getattr(connector, "rebuild_kv_transfer_endpoint", None)
+    if callable(rebuild):
+        engine_id = (
+            str(kv_config.engine_id) if kv_config.engine_id is not None else None
+        )
+        rebuild(local_ip, engine_id)
 
 
 def refresh_scheduler_handshake_metadata_after_resume(

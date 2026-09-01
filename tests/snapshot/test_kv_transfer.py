@@ -52,6 +52,24 @@ def test_refresh_scheduler_updates_kv_identity_and_host():
     assert kv_config.engine_id == "instance-new"
 
 
+def test_refresh_scheduler_rebuilds_connector_without_scheduler_delegate():
+    rebuild = Mock()
+    connector = SimpleNamespace(rebuild_kv_transfer_endpoint=rebuild)
+    kv_config = SimpleNamespace(
+        is_kv_producer=True,
+        is_kv_consumer=False,
+        engine_id="engine-id",
+    )
+    engine_core = SimpleNamespace(
+        vllm_config=SimpleNamespace(kv_transfer_config=kv_config),
+        scheduler=SimpleNamespace(connector=connector),
+    )
+
+    refresh_scheduler_after_resume(engine_core, "10.0.0.2")
+
+    rebuild.assert_called_once_with("10.0.0.2", "engine-id")
+
+
 def test_refresh_scheduler_replaces_worker_handshake_metadata():
     kv_connector = Mock()
     scheduler = SimpleNamespace(get_kv_connector=Mock(return_value=kv_connector))
