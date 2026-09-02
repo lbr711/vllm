@@ -601,18 +601,6 @@ class Attention(nn.Module, AttentionLayerBase):
         s += f", backend={self.impl.__class__.__name__}"
         return s
 
-    def rebuild_derived_tensors_after_snapshot_restore(self, act_dtype: torch.dtype) -> None:
-        """Forward derived-state restoration to the attention implementation."""
-        restore = getattr(self.impl, "rebuild_derived_tensors_after_snapshot_restore", None)
-        if callable(restore):
-            restore(act_dtype)
-
-    def reset_runtime_state_after_snapshot_restore(self) -> None:
-        """Forward the post-restore reset to the attention implementation."""
-        reset = getattr(self.impl, "reset_runtime_state_after_snapshot_restore", None)
-        if callable(reset):
-            reset()
-
     def process_weights_after_loading(self, act_dtype: torch.dtype):
         self.impl.process_weights_after_loading(act_dtype)
 

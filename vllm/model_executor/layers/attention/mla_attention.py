@@ -945,18 +945,6 @@ class MLAAttention(nn.Module, AttentionLayerBase):
             output_padded[num_actual_toks:].zero_()
         return output_padded
 
-    def rebuild_derived_tensors_after_snapshot_restore(self, act_dtype: torch.dtype) -> None:
-        """Forward derived-state restoration to the attention implementation."""
-        restore = getattr(self.impl, "rebuild_derived_tensors_after_snapshot_restore", None)
-        if callable(restore):
-            restore(act_dtype)
-
-    def reset_runtime_state_after_snapshot_restore(self) -> None:
-        """Forward the post-restore reset to the attention implementation."""
-        reset = getattr(self.impl, "reset_runtime_state_after_snapshot_restore", None)
-        if callable(reset):
-            reset()
-
     def process_weights_after_loading(self, act_dtype: torch.dtype):
         # we currently do not have quantized bmm's which are needed for
         # `W_UV` and `W_UK_T`, we just store fp16/bf16 copies and perform
