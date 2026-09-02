@@ -22,6 +22,7 @@ def test_rotate_engine_id_preserves_instance_and_dp_rank():
 
 
 def test_refresh_scheduler_updates_kv_identity_and_host():
+    rebuild = Mock()
     connector_scheduler = SimpleNamespace(
         side_channel_host="10.0.0.1",
         engine_id="instance-0123456789abcdef0123456789abcdef_dp0",
@@ -29,6 +30,7 @@ def test_refresh_scheduler_updates_kv_identity_and_host():
     connector = SimpleNamespace(
         connector_scheduler=connector_scheduler,
         engine_id=connector_scheduler.engine_id,
+        rebuild_kv_transfer_endpoint=rebuild,
     )
     kv_config = SimpleNamespace(
         is_kv_producer=True,
@@ -50,6 +52,7 @@ def test_refresh_scheduler_updates_kv_identity_and_host():
     assert connector_scheduler.engine_id == "instance-new"
     assert connector.engine_id == "instance-new"
     assert kv_config.engine_id == "instance-new"
+    rebuild.assert_called_once_with("10.0.0.2", "instance-new")
 
 
 def test_refresh_scheduler_rebuilds_connector_without_scheduler_delegate():

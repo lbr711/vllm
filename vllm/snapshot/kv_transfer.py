@@ -42,9 +42,9 @@ def refresh_scheduler_after_resume(
         return
 
     connector = engine_core.scheduler.connector
-    connector_scheduler = (
-        getattr(connector, "connector_scheduler", None) if connector else None
-    )
+    if connector is None:
+        return
+    connector_scheduler = getattr(connector, "connector_scheduler", None)
     if connector_scheduler is not None and hasattr(
         connector_scheduler, "side_channel_host"
     ):
@@ -69,12 +69,8 @@ def refresh_scheduler_after_resume(
             new_engine_id,
         )
 
-    rebuild = getattr(connector, "rebuild_kv_transfer_endpoint", None)
-    if callable(rebuild):
-        engine_id = (
-            str(kv_config.engine_id) if kv_config.engine_id is not None else None
-        )
-        rebuild(local_ip, engine_id)
+    engine_id = str(kv_config.engine_id) if kv_config.engine_id is not None else None
+    connector.rebuild_kv_transfer_endpoint(local_ip, engine_id)
 
 
 def refresh_scheduler_handshake_metadata_after_resume(
