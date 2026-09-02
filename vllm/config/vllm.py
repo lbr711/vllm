@@ -46,6 +46,7 @@ from .parallel import ParallelConfig
 from .profiler import ProfilerConfig
 from .reasoning import ReasoningConfig
 from .scheduler import SchedulerConfig
+from .snapshot import SnapshotConfig
 from .speculative import EagleModelTypes, NgramGPUTypes, SpeculativeConfig
 from .structured_outputs import StructuredOutputsConfig
 from .utils import SupportsHash, config, replace
@@ -369,6 +370,8 @@ class VllmConfig:
     """The configurations for distributed EC cache transfer."""
     reasoning_config: ReasoningConfig | None = None
     """The configurations for reasoning model."""
+    snapshot_config: SnapshotConfig | None = None
+    """Container snapshot configuration."""
     # some opaque config, only used to provide additional information
     # for the hash computation, mainly used for testing, debugging or out of
     # tree config registration.
@@ -943,6 +946,9 @@ class VllmConfig:
             logger.info_once("Performance mode set to '%s'.", self.performance_mode)
 
         self.try_verify_and_update_config()
+
+        if self.snapshot_config is not None:
+            self.parallel_config.reserve_snapshot_ports()
 
         if self.model_config is not None:
             self.model_config.verify_with_parallel_config(self.parallel_config)
