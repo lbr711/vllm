@@ -22,8 +22,8 @@ def rotate_engine_id(engine_id: str) -> str:
     match = re.match(r"^(.+)-([0-9a-f]{32})(_dp\d+)?$", engine_id)
     if match is None:
         logger.warning(
-            "[snapshot][rebuild] engine_id %s does not match expected format; "
-            "appending a new UUID",
+            "[snapshot][kv-transfer] engine ID format not recognized; "
+            "appending a new UUID: engine_id=%s",
             engine_id,
         )
         return f"{engine_id}-{uuid4().hex}"
@@ -51,7 +51,8 @@ def refresh_scheduler_after_snapshot_restore(
         old_host = connector_scheduler.side_channel_host
         connector_scheduler.side_channel_host = local_ip
         logger.info(
-            "[snapshot][rebuild] scheduler side_channel_host %s->%s",
+            "[snapshot][kv-transfer] scheduler side-channel host updated: "
+            "old=%s new=%s",
             old_host,
             local_ip,
         )
@@ -64,7 +65,7 @@ def refresh_scheduler_after_snapshot_restore(
             connector.engine_id = new_engine_id
         kv_config.engine_id = new_engine_id
         logger.info(
-            "[snapshot][rebuild] scheduler engine_id %s->%s",
+            "[snapshot][kv-transfer] scheduler engine ID updated: old=%s new=%s",
             old_engine_id,
             new_engine_id,
         )

@@ -47,7 +47,9 @@ class SnapshotSentinel(threading.Thread):
         if self._stop_event.is_set():
             return
 
-        logger.info("[snapshot] Infer is healthy, starting to suspend")
+        logger.info(
+            "[snapshot][sentinel] inference endpoint ready; starting suspend"
+        )
         self._call_suspend()
         if self._stop_event.is_set():
             return
@@ -56,7 +58,9 @@ class SnapshotSentinel(threading.Thread):
         if self._stop_event.is_set():
             return
 
-        logger.info("[snapshot] Restored from host-side snapshot, starting to resume")
+        logger.info(
+            "[snapshot][sentinel] host snapshot restored; starting resume"
+        )
         self._call_resume()
 
     def _request(
@@ -87,7 +91,9 @@ class SnapshotSentinel(threading.Thread):
             except Exception as exc:
                 if retries % RETRY_LOG_FREQUENCY == 0:
                     logger.warning(
-                        "[snapshot] Infer health check failed, will retry: %s",
+                        "[snapshot][sentinel] health check failed; retrying: "
+                        "attempt=%d error=%s",
+                        retries + 1,
                         exc,
                     )
                 retries += 1
@@ -110,16 +116,17 @@ class SnapshotSentinel(threading.Thread):
                     {"model_save_path": model_save_path},
                 )
                 logger.info(
-                    "[snapshot] Suspend completed, model_save_path=%r",
+                    "[snapshot][sentinel] request completed: "
+                    "operation=suspend model_save_path=%r",
                     model_save_path,
                 )
                 return
             except Exception as exc:
                 if retries % RETRY_LOG_FREQUENCY == 0:
                     logger.warning(
-                        "[snapshot] Suspend request failed %s times, will retry, "
-                        "model_save_path=%r: %s",
-                        retries,
+                        "[snapshot][sentinel] request failed; retrying: "
+                        "operation=suspend attempt=%d model_save_path=%r error=%s",
+                        retries + 1,
                         model_save_path,
                         exc,
                     )
@@ -141,15 +148,18 @@ class SnapshotSentinel(threading.Thread):
                     "POST", "/device_unlock", DEVICE_UNLOCK_TIMEOUT, host
                 )
                 logger.info(
-                    "[snapshot] Checkpoint completed, device unlocked; stopping "
-                    "snapshot sentinel"
+                    "[snapshot][sentinel] checkpoint completed; "
+                    "device unlocked and sentinel stopping"
                 )
                 self._stop_event.set()
                 return
             except Exception as exc:
                 if retries % RETRY_LOG_FREQUENCY == 0:
                     logger.warning(
-                        "[snapshot] Checkpoint not reached, will retry: %s", exc
+                        "[snapshot][sentinel] checkpoint pending; retrying: "
+                        "attempt=%d error=%s",
+                        retries + 1,
+                        exc,
                     )
                 retries += 1
                 self._stop_event.wait(RETRY_INTERVAL)
@@ -180,7 +190,8 @@ class SnapshotSentinel(threading.Thread):
                     },
                 )
                 logger.info(
-                    "[snapshot] Resume completed, model_path=%r, "
+                    "[snapshot][sentinel] request completed: operation=resume "
+                    "model_path=%r "
                     "data_parallel_master_ip=%r",
                     model_load_path,
                     data_parallel_master_ip,
@@ -189,9 +200,10 @@ class SnapshotSentinel(threading.Thread):
             except Exception as exc:
                 if retries % RETRY_LOG_FREQUENCY == 0:
                     logger.warning(
-                        "[snapshot] Resume request failed %s times, will retry, "
-                        "model_path=%r, data_parallel_master_ip=%r: %s",
-                        retries,
+                        "[snapshot][sentinel] request failed; retrying: "
+                        "operation=resume attempt=%d model_path=%r "
+                        "data_parallel_master_ip=%r error=%s",
+                        retries + 1,
                         model_load_path,
                         data_parallel_master_ip,
                         exc,
