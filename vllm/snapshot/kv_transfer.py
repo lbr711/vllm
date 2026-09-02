@@ -32,7 +32,7 @@ def rotate_engine_id(engine_id: str) -> str:
     return f"{prefix}-{uuid4().hex}{dp_suffix}"
 
 
-def refresh_scheduler_after_resume(
+def refresh_scheduler_after_snapshot_restore(
     engine_core: SnapshotEngine,
     local_ip: str,
 ) -> None:
@@ -73,7 +73,7 @@ def refresh_scheduler_after_resume(
     connector.rebuild_kv_transfer_endpoint(local_ip, engine_id)
 
 
-def refresh_scheduler_handshake_metadata_after_resume(
+def refresh_scheduler_handshake_metadata_after_snapshot_restore(
     engine_core: SnapshotEngine,
 ) -> None:
     """Refresh scheduler per-rank KV endpoint mappings after worker rebuild."""

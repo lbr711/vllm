@@ -33,8 +33,8 @@ from vllm.logging_utils.dump_input import dump_engine_exception
 from vllm.lora.request import LoRARequest
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.snapshot.kv_transfer import (
-    refresh_scheduler_after_resume,
-    refresh_scheduler_handshake_metadata_after_resume,
+    refresh_scheduler_after_snapshot_restore,
+    refresh_scheduler_handshake_metadata_after_snapshot_restore,
 )
 from vllm.snapshot.utils import is_restore
 from vllm.tasks import POOLING_TASKS, SupportedTask
@@ -2008,7 +2008,7 @@ class EngineCoreProc(EngineCore):
 
         local_ip = get_ip(force=True)
 
-        refresh_scheduler_after_resume(self, local_ip)
+        refresh_scheduler_after_snapshot_restore(self, local_ip)
 
         parallel_config = self.vllm_config.parallel_config
         parallel_config.data_parallel_master_ip = data_parallel_master_ip
@@ -2026,7 +2026,7 @@ class EngineCoreProc(EngineCore):
             self.dp_group = parallel_config.stateless_init_dp_group()
         
         # Must after worker rebuild
-        refresh_scheduler_handshake_metadata_after_resume(self)
+        refresh_scheduler_handshake_metadata_after_snapshot_restore(self)
 
 class DPEngineCoreProc(EngineCoreProc):
     """ZMQ-wrapper for running EngineCore in background process

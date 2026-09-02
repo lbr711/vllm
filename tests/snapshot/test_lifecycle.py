@@ -61,9 +61,9 @@ def test_resume_reconnects_transport_before_worker_restore():
 
     with (
         patch("vllm.v1.engine.core.get_ip", return_value="10.0.0.2"),
-        patch("vllm.v1.engine.core.refresh_scheduler_after_resume") as refresh,
+        patch("vllm.v1.engine.core.refresh_scheduler_after_snapshot_restore") as refresh,
         patch(
-            "vllm.v1.engine.core.refresh_scheduler_handshake_metadata_after_resume"
+            "vllm.v1.engine.core.refresh_scheduler_handshake_metadata_after_snapshot_restore"
         ) as refresh_metadata,
     ):
         EngineCoreProc.resume(engine, "10.0.0.3", "/snapshot/model")
@@ -89,8 +89,8 @@ def test_resume_rebuilds_engine_core_dp_group():
             "vllm.v1.engine.core.stateless_destroy_torch_distributed_process_group"
         ) as destroy_dp_group,
         patch("vllm.v1.engine.core.get_ip", return_value="10.0.0.2"),
-        patch("vllm.v1.engine.core.refresh_scheduler_after_resume"),
-        patch("vllm.v1.engine.core.refresh_scheduler_handshake_metadata_after_resume"),
+        patch("vllm.v1.engine.core.refresh_scheduler_after_snapshot_restore"),
+        patch("vllm.v1.engine.core.refresh_scheduler_handshake_metadata_after_snapshot_restore"),
     ):
         EngineCoreProc.resume(engine, "10.0.0.3", None)
 

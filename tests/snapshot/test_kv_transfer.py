@@ -5,8 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from vllm.snapshot.kv_transfer import (
-    refresh_scheduler_after_resume,
-    refresh_scheduler_handshake_metadata_after_resume,
+    refresh_scheduler_after_snapshot_restore,
+    refresh_scheduler_handshake_metadata_after_snapshot_restore,
     rotate_engine_id,
 )
 
@@ -46,7 +46,7 @@ def test_refresh_scheduler_updates_kv_identity_and_host():
         "vllm.snapshot.kv_transfer.rotate_engine_id",
         return_value="instance-new",
     ):
-        refresh_scheduler_after_resume(engine_core, "10.0.0.2")
+        refresh_scheduler_after_snapshot_restore(engine_core, "10.0.0.2")
 
     assert connector_scheduler.side_channel_host == "10.0.0.2"
     assert connector_scheduler.engine_id == "instance-new"
@@ -68,7 +68,7 @@ def test_refresh_scheduler_rebuilds_connector_without_scheduler_delegate():
         scheduler=SimpleNamespace(connector=connector),
     )
 
-    refresh_scheduler_after_resume(engine_core, "10.0.0.2")
+    refresh_scheduler_after_snapshot_restore(engine_core, "10.0.0.2")
 
     rebuild.assert_called_once_with("10.0.0.2", "engine-id")
 
@@ -92,7 +92,7 @@ def test_refresh_scheduler_replaces_worker_handshake_metadata():
         model_executor=model_executor,
     )
 
-    refresh_scheduler_handshake_metadata_after_resume(engine_core)
+    refresh_scheduler_handshake_metadata_after_snapshot_restore(engine_core)
 
     kv_connector.set_xfer_handshake_metadata_pp_aware.assert_called_once_with(
         {(0, 0): "rank-0", (0, 1): "rank-1"}
