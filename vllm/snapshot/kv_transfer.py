@@ -44,6 +44,14 @@ def refresh_scheduler_kv_transfer_identity_after_snapshot_restore(
     connector = engine_core.scheduler.connector
     if connector is None:
         return
+
+    assert kv_config.engine_id is not None
+    old_engine_id = str(kv_config.engine_id)
+    new_engine_id = rotate_engine_id(old_engine_id)
+    kv_config.engine_id = new_engine_id
+    if hasattr(connector, "engine_id"):
+        connector.engine_id = new_engine_id
+
     connector_scheduler = getattr(connector, "connector_scheduler", None)
     if connector_scheduler is not None and hasattr(
         connector_scheduler, "side_channel_host"
@@ -58,17 +66,13 @@ def refresh_scheduler_kv_transfer_identity_after_snapshot_restore(
         )
 
     if connector_scheduler is not None and hasattr(connector_scheduler, "engine_id"):
-        old_engine_id = str(connector_scheduler.engine_id)
-        new_engine_id = rotate_engine_id(old_engine_id)
         connector_scheduler.engine_id = new_engine_id
-        if hasattr(connector, "engine_id"):
-            connector.engine_id = new_engine_id
-        kv_config.engine_id = new_engine_id
-        logger.info(
-            "[snapshot][kv-transfer] scheduler engine ID updated: old=%s new=%s",
-            old_engine_id,
-            new_engine_id,
-        )
+
+    logger.info(
+        "[snapshot][kv-transfer] scheduler engine ID updated: old=%s new=%s",
+        old_engine_id,
+        new_engine_id,
+    )
 
 
 def rebuild_scheduler_kv_transfer_endpoint_after_snapshot_restore(
