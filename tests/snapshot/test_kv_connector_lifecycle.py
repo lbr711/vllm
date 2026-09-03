@@ -4,7 +4,7 @@
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from vllm.snapshot.kv_transfer import (
+from vllm.snapshot.kv_connector_lifecycle import (
     rebuild_scheduler_kv_transfer_endpoint_after_snapshot_restore,
     refresh_scheduler_handshake_metadata_after_snapshot_restore,
     refresh_scheduler_kv_transfer_identity_after_snapshot_restore,
@@ -15,7 +15,7 @@ from vllm.snapshot.kv_transfer import (
 def test_rotate_engine_id_preserves_instance_and_dp_rank():
     engine_id = "instance-0123456789abcdef0123456789abcdef_dp3"
 
-    with patch("vllm.snapshot.kv_transfer.uuid4") as uuid4:
+    with patch("vllm.snapshot.kv_connector_lifecycle.uuid4") as uuid4:
         uuid4.return_value.hex = "fedcba9876543210fedcba9876543210"
         result = rotate_engine_id(engine_id)
 
@@ -44,7 +44,7 @@ def test_refresh_scheduler_updates_kv_identity_and_host():
     )
 
     with patch(
-        "vllm.snapshot.kv_transfer.rotate_engine_id",
+        "vllm.snapshot.kv_connector_lifecycle.rotate_engine_id",
         return_value="instance-new",
     ):
         refresh_scheduler_kv_transfer_identity_after_snapshot_restore(
@@ -91,7 +91,7 @@ def test_refresh_scheduler_rotates_identity_without_scheduler_engine_id():
     )
 
     with patch(
-        "vllm.snapshot.kv_transfer.rotate_engine_id",
+        "vllm.snapshot.kv_connector_lifecycle.rotate_engine_id",
         return_value="instance-new",
     ):
         refresh_scheduler_kv_transfer_identity_after_snapshot_restore(

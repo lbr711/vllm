@@ -32,7 +32,7 @@ from vllm.logger import init_logger
 from vllm.logging_utils.dump_input import dump_engine_exception
 from vllm.lora.request import LoRARequest
 from vllm.multimodal import MULTIMODAL_REGISTRY
-from vllm.snapshot.kv_transfer import (
+from vllm.snapshot.kv_connector_lifecycle import (
     rebuild_scheduler_kv_transfer_endpoint_after_snapshot_restore,
     refresh_scheduler_handshake_metadata_after_snapshot_restore,
     refresh_scheduler_kv_transfer_identity_after_snapshot_restore,
