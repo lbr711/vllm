@@ -33,22 +33,21 @@ from vllm.logging_utils.dump_input import dump_engine_exception
 from vllm.lora.request import LoRARequest
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.snapshot.kv_connector_lifecycle import (
-    rebuild_scheduler_kv_transfer_endpoint_after_snapshot_restore,
     refresh_scheduler_handshake_metadata_after_snapshot_restore,
-    refresh_scheduler_kv_transfer_identity_after_snapshot_restore,
+    rotate_engine_id,
 )
 from vllm.snapshot.utils import is_restore
 from vllm.tasks import POOLING_TASKS, SupportedTask
 from vllm.tracing import instrument, maybe_init_worker_tracer
 from vllm.transformers_utils.config import maybe_register_config_serialize_by_value
 from vllm.utils import numa_utils
-from vllm.utils.network_utils import get_ip
 from vllm.utils.gc_utils import (
     freeze_gc_heap,
     maybe_attach_gc_debug_callback,
 )
 from vllm.utils.hashing import get_hash_fn_by_name
 from vllm.utils.network_utils import (
+    get_ip,
     make_zmq_socket,
     replace_zmq_tcp_host,
     split_zmq_path,
@@ -2007,21 +2006,32 @@ class EngineCoreProc(EngineCore):
                 self._reconnect_transport(data_parallel_master_ip)
                 self._transport_reconnected = True
 
-        local_ip = get_ip(force=True)
-
-        refresh_scheduler_kv_transfer_identity_after_snapshot_restore(self, local_ip)
-
         parallel_config = self.vllm_config.parallel_config
         parallel_config.data_parallel_master_ip = data_parallel_master_ip
+        local_ip = get_ip(force=True)
+
         kv_config = self.vllm_config.kv_transfer_config
-        new_engine_id = str(kv_config.engine_id) if kv_config is not None else None
+        new_engine_id = None
+        if kv_config is not None and (
+            kv_config.is_kv_producer or kv_config.is_kv_consumer
+        ):
+            assert kv_config.engine_id is not None
+            old_engine_id = str(kv_config.engine_id)
+            new_engine_id = rotate_engine_id(old_engine_id)
+            kv_config.engine_id = new_engine_id
+            logger.info(
+                "[snapshot][kv-transfer] engine ID updated: old=%s new=%s",
+                old_engine_id,
+                new_engine_id,
+            )
         self.model_executor.resume(
             local_ip,
             data_parallel_master_ip,
             model_path,
             new_engine_id,
         )
-        rebuild_scheduler_kv_transfer_endpoint_after_snapshot_restore(self, local_ip)
+        if new_engine_id is not None and self.scheduler.connector is not None:
+            self.scheduler.connector.rebuild_kv_transfer_endpoint(local_ip, new_engine_id)
 
         if self.dp_group is not None:
             stateless_destroy_torch_distributed_process_group(self.dp_group)
