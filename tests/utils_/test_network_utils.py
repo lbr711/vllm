@@ -203,6 +203,20 @@ def test_get_open_port_ephemeral_without_dp_master_port(
             s.bind(("localhost", port))
 
 
+def test_get_open_ports_list_excludes_reserved_ports(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("VLLM_PORT", "5678")
+
+    with patch(
+        "vllm.utils.network_utils._get_open_port",
+        side_effect=lambda start_port, max_attempts: start_port,
+    ):
+        ports = get_open_ports_list(2, exclude_ports={5678, 5679})
+
+    assert set(ports) == {5680, 5681}
+
+
 @pytest.mark.parametrize(
     "path,expected",
     [

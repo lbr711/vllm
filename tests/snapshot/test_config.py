@@ -7,8 +7,13 @@ from unittest.mock import patch
 from vllm.config.parallel import ParallelConfig
 
 
-def test_reserve_snapshot_ports():
+def test_reserve_snapshot_ports_excludes_existing_ports():
     parallel_config = SimpleNamespace(
+        data_parallel_master_port=1000,
+        data_parallel_rpc_port=1003,
+        master_port=1004,
+        _coord_store_port=1005,
+        _data_parallel_master_port_list=[1001, 1002],
         _snapshot_data_parallel_port_list=None,
     )
 
@@ -17,7 +22,9 @@ def test_reserve_snapshot_ports():
     ) as get_ports:
         ParallelConfig.reserve_snapshot_ports(parallel_config)
 
-    get_ports.assert_called_once_with(2)
+    get_ports.assert_called_once_with(
+        2, exclude_ports={1000, 1001, 1002, 1003, 1004, 1005}
+    )
     assert parallel_config._snapshot_data_parallel_port_list == [2000, 2001]
 
 
