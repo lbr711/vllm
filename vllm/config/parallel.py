@@ -564,13 +564,30 @@ class ParallelConfig:
         if is_restore() and self._snapshot_data_parallel_port_list is not None:
             if not self._snapshot_data_parallel_port_list:
                 raise RuntimeError("No port reserved for snapshot restore")
-            return self._snapshot_data_parallel_port_list.pop()
+            port = self._snapshot_data_parallel_port_list.pop()
+            logger.info(
+                "[snapshot][port] selected restore DP init port: port=%d "
+                "remaining_ports=%s",
+                port,
+                self._snapshot_data_parallel_port_list,
+            )
+            return port
 
         if self._data_parallel_master_port_list:
             answer = self._data_parallel_master_port_list.pop()
+            source = "prepared DP port list"
         else:
             answer = self.data_parallel_master_port
             self.data_parallel_master_port += 1
+            source = "data_parallel_master_port"
+
+        logger.info(
+            "[parallel][port] selected DP init port: port=%d source=%s "
+            "remaining_ports=%s",
+            answer,
+            source,
+            self._data_parallel_master_port_list,
+        )
 
         return answer
 
@@ -590,6 +607,13 @@ class ParallelConfig:
             excluded_ports.add(self._coord_store_port)
         self._snapshot_data_parallel_port_list = get_open_ports_list(
             2, exclude_ports=excluded_ports
+        )
+        logger.info(
+            "[snapshot][port] reserved restore ports: worker_port=%d "
+            "engine_core_port=%d excluded_ports=%s",
+            self._snapshot_data_parallel_port_list[0],
+            self._snapshot_data_parallel_port_list[1],
+            sorted(excluded_ports),
         )
 
     def _pick_stateless_dp_port(self) -> tuple[int, socket.socket | None]:
@@ -615,9 +639,24 @@ class ParallelConfig:
             s.listen()
             port = s.getsockname()[1]
             store.set(key, str(port).encode())
+            logger.info(
+                "[parallel][port] published stateless DP group port: "
+                "master=%s:%d rank=%d role=server",
+                self.data_parallel_master_ip,
+                port,
+                self.data_parallel_rank,
+            )
             return port, s
         else:
-            return int(store.get(key).decode()), None
+            port = int(store.get(key).decode())
+            logger.info(
+                "[parallel][port] received stateless DP group port: "
+                "master=%s:%d rank=%d role=client",
+                self.data_parallel_master_ip,
+                port,
+                self.data_parallel_rank,
+            )
+            return port, None
 
     @overload
     def stateless_init_dp_group(
@@ -645,9 +684,21 @@ class ParallelConfig:
 
         max_retries = 5
         last_exc: Exception | None = None
-        for _ in range(max_retries):
+        for attempt in range(1, max_retries + 1):
+            port = None
             try:
                 port, listen_socket = self._pick_stateless_dp_port()
+                logger.info(
+                    "[parallel][port] initializing stateless DP group: "
+                    "master=%s:%d rank=%d world_size=%d role=%s attempt=%d/%d",
+                    self.data_parallel_master_ip,
+                    port,
+                    self.data_parallel_rank,
+                    self.data_parallel_size,
+                    "server" if self.data_parallel_rank == 0 else "client",
+                    attempt,
+                    max_retries,
+                )
                 # use gloo since the engine process might not have cuda device
                 return stateless_init_torch_distributed_process_group(
                     self.data_parallel_master_ip,
@@ -661,7 +712,14 @@ class ParallelConfig:
             except DistNetworkError as e:
                 # We only want to retry when the root cause is EADDRINUSE.
                 if "EADDRINUSE" in str(e):
-                    logger.warning("Address already in use. Retrying with a new port.")
+                    logger.warning(
+                        "[parallel][port] stateless DP group port is already in use: "
+                        "port=%s rank=%d attempt=%d/%d; retrying",
+                        port,
+                        self.data_parallel_rank,
+                        attempt,
+                        max_retries,
+                    )
                     last_exc = e
                     continue  # try again with a new port
                 raise e
