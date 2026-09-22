@@ -210,6 +210,13 @@ def build_app(
 
     register_vllm_serve_api_routers(app)
 
+    if args.snapshot_config is not None:
+        from vllm.entrypoints.serve.snapshot.api_router import (
+            attach_router as attach_snapshot_router,
+        )
+
+        attach_snapshot_router(app)
+
     from vllm.entrypoints.openai.models.api_router import (
         attach_router as register_models_api_router,
     )
@@ -743,6 +750,18 @@ async def run_server_worker(
     listen_address, sock, args, client_config=None, **uvicorn_kwargs
 ) -> None:
     """Run a single API server worker."""
+
+    if args.snapshot_config is not None:
+        client_config = dict(client_config) if client_config else {}
+        from vllm.snapshot.monitor import SnapshotMonitor
+
+        # All API workers receive the same process-shared monitor from serve.
+        snapshot_monitor = client_config.get("snapshot_monitor")
+        if snapshot_monitor is None:
+            snapshot_monitor = SnapshotMonitor()
+            client_config["snapshot_monitor"] = snapshot_monitor
+        args._snapshot_monitor = snapshot_monitor
+        args._snapshot_sentinel_leader = client_config.get("client_index", 0) == 0
 
     if args.tool_parser_plugin and len(args.tool_parser_plugin) > 3:
         ToolParserManager.import_tool_parser(args.tool_parser_plugin)
