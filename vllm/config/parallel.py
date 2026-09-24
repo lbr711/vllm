@@ -998,6 +998,10 @@ class ParallelConfig:
             if not self.enable_elastic_ep:
                 if not self._data_parallel_master_port_list:
                     self._data_parallel_master_port_list = get_open_ports_list(5)
+                    logger.info(
+                        "[parallel][port] generated DP init ports: ports=%s",
+                        self._data_parallel_master_port_list,
+                    )
                 self.data_parallel_master_port = (
                     self._data_parallel_master_port_list.pop()
                 )
