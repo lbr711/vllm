@@ -47,9 +47,7 @@ class SnapshotSentinel(threading.Thread):
         if self._stop_event.is_set():
             return
 
-        logger.info(
-            "[snapshot][sentinel] inference endpoint ready; starting suspend"
-        )
+        logger.info("[snapshot][sentinel] inference endpoint ready; starting suspend")
         self._call_suspend()
         if self._stop_event.is_set():
             return
@@ -58,9 +56,7 @@ class SnapshotSentinel(threading.Thread):
         if self._stop_event.is_set():
             return
 
-        logger.info(
-            "[snapshot][sentinel] host snapshot restored; starting resume"
-        )
+        logger.info("[snapshot][sentinel] host snapshot restored; starting resume")
         self._call_resume()
 
     def _request(
@@ -144,9 +140,7 @@ class SnapshotSentinel(threading.Thread):
                 if checkpoint != "done":
                     raise ValueError("Container checkpoint is not done")
 
-                self._request(
-                    "POST", "/device_unlock", DEVICE_UNLOCK_TIMEOUT, host
-                )
+                self._request("POST", "/device_unlock", DEVICE_UNLOCK_TIMEOUT, host)
                 logger.info(
                     "[snapshot][sentinel] checkpoint completed; "
                     "device unlocked and sentinel stopping"

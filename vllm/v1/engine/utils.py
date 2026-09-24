@@ -1342,8 +1342,7 @@ def wait_for_engine_startup(
                 EngineHandshakeMetadata(
                     addresses=launch.addresses,
                     parallel_config={
-                        k: getattr(parallel_config, k)
-                        for k in parallel_config_keys
+                        k: getattr(parallel_config, k) for k in parallel_config_keys
                     }
                     if coordinated_dp
                     else {},

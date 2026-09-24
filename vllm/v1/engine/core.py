@@ -1220,7 +1220,9 @@ class EngineCoreProc(EngineCore):
             self.engine_index,
         )
 
-    def _reconnect_transport_with_snapshot_metadata(self, snapshot_metadata: str) -> None:
+    def _reconnect_transport_with_snapshot_metadata(
+        self, snapshot_metadata: str
+    ) -> None:
         try:
             from vllm.snapshot.utils import (
                 RETRY_INTERVAL,
@@ -2150,7 +2152,9 @@ class EngineCoreProc(EngineCore):
             new_engine_id,
         )
         if new_engine_id is not None and self.scheduler.connector is not None:
-            self.scheduler.connector.rebuild_kv_transfer_endpoint(local_ip, new_engine_id)
+            self.scheduler.connector.rebuild_kv_transfer_endpoint(
+                local_ip, new_engine_id
+            )
 
         if self.dp_group is not None:
             stateless_destroy_torch_distributed_process_group(self.dp_group)
