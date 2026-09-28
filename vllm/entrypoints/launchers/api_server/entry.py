@@ -181,6 +181,17 @@ async def run_server_worker(
 ) -> None:
     """Run a single API server worker."""
 
+    if args.snapshot_config is not None:
+        client_config = dict(client_config) if client_config else {}
+        from vllm.snapshot.monitor import SnapshotMonitor
+
+        snapshot_monitor = client_config.get("snapshot_monitor")
+        if snapshot_monitor is None:
+            snapshot_monitor = SnapshotMonitor()
+            client_config["snapshot_monitor"] = snapshot_monitor
+        args._snapshot_monitor = snapshot_monitor
+        args._snapshot_sentinel_leader = client_config.get("client_index", 0) == 0
+
     if args.tool_parser_plugin and len(args.tool_parser_plugin) > 3:
         ToolParserManager.import_tool_parser(args.tool_parser_plugin)
 
