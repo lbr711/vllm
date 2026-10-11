@@ -141,7 +141,6 @@ class WorkerBase:
 
     def resume(
         self,
-        local_ip: str,
         data_parallel_master_ip: str,
         model_path: str | None = None,
         new_engine_id: str | None = None,

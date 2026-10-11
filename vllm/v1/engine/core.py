@@ -2162,6 +2162,10 @@ class EngineCoreProc(EngineCore):
         parallel_config = self.vllm_config.parallel_config
         parallel_config.data_parallel_master_ip = data_parallel_master_ip
         local_ip = get_ip(force=True)
+        if local_ip in ("", "0.0.0.0", "::"):
+            raise RuntimeError(
+                "Unable to resolve local EngineCore IP for snapshot restore"
+            )
 
         kv_config = self.vllm_config.kv_transfer_config
         new_engine_id = None
@@ -2178,7 +2182,6 @@ class EngineCoreProc(EngineCore):
                 new_engine_id,
             )
         self.model_executor.resume(
-            local_ip,
             data_parallel_master_ip,
             model_path,
             new_engine_id,

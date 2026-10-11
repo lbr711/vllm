@@ -5,6 +5,8 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
+import pytest
+
 from vllm.v1.engine.core import EngineCoreProc
 from vllm.v1.executor.abstract import Executor
 
@@ -45,14 +47,14 @@ def test_model_executor_delegates_lifecycle_to_workers():
 
     Executor.suspend(executor, "/snapshot/model")
     Executor.device_unlock(executor)
-    Executor.resume(executor, "10.0.0.2", "10.0.0.3", "/snapshot/model", None)
+    Executor.resume(executor, "10.0.0.3", "/snapshot/model", None)
 
     assert executor.collective_rpc.call_args_list == [
         call("suspend", args=("/snapshot/model",)),
         call("device_unlock"),
         call(
             "resume",
-            args=("10.0.0.2", "10.0.0.3", "/snapshot/model", None),
+            args=("10.0.0.3", "/snapshot/model", None),
         ),
     ]
 
@@ -66,7 +68,7 @@ def test_resume_reconnects_transport_before_worker_restore():
     )
 
     with (
-        patch("vllm.v1.engine.core.get_ip", return_value="10.0.0.2"),
+        patch("vllm.v1.engine.core.get_ip", return_value="10.0.0.2") as get_ip,
         patch("vllm.v1.engine.core.rotate_engine_id", return_value="instance-new"),
         patch(
             "vllm.v1.engine.core.refresh_scheduler_handshake_metadata_after_snapshot_restore"
@@ -88,11 +90,11 @@ def test_resume_reconnects_transport_before_worker_restore():
 
         assert engine.vllm_config.parallel_config.data_parallel_master_ip == "10.0.0.3"
         engine.model_executor.resume.assert_called_once_with(
-            "10.0.0.2",
             "10.0.0.3",
             "/snapshot/model",
             "instance-new",
         )
+        get_ip.assert_called_once_with(force=True)
     engine._reconnect_transport.assert_called_once_with("10.0.0.3")
     assert engine._transport_reconnected
     engine.scheduler.connector.rebuild_kv_transfer_endpoint.assert_called_once_with(
@@ -124,3 +126,14 @@ def test_resume_rebuilds_engine_core_dp_group():
     engine._reconnect_transport.assert_not_called()
     assert engine.vllm_config.parallel_config._data_parallel_master_port_list == [1234]
     assert engine.dp_group == "new-dp-group"
+
+
+@pytest.mark.parametrize("ip", ["", "0.0.0.0", "::"])
+def test_resume_rejects_unresolved_engine_ip_before_worker_restore(ip):
+    engine = _engine(transport_reconnected=True)
+    with patch("vllm.v1.engine.core.get_ip", return_value=ip) as get_ip:
+        with pytest.raises(RuntimeError, match="local EngineCore IP"):
+            EngineCoreProc.resume(engine, "10.0.0.3", "/snapshot/model")
+        get_ip.assert_called_once_with(force=True)
+    engine.model_executor.resume.assert_not_called()
+    engine.scheduler.connector.rebuild_kv_transfer_endpoint.assert_not_called()
