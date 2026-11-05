@@ -36,6 +36,7 @@ from vllm.multimodal.cache import MultiModalCacheMissError
 from vllm.snapshot.kv_connector_lifecycle import (
     refresh_scheduler_handshake_metadata_after_snapshot_restore,
     rotate_engine_id,
+    snapshot_scheduler_runtime,
 )
 from vllm.snapshot.utils import is_restore
 from vllm.tasks import POOLING_TASKS, SupportedTask
@@ -2144,8 +2145,10 @@ class EngineCoreProc(EngineCore):
 
     def suspend(self, model_save_path: str | None = None) -> None:
         self.model_executor.suspend(model_save_path)
+        snapshot_scheduler_runtime(self, "suspend")
 
     def device_unlock(self) -> None:
+        snapshot_scheduler_runtime(self, "device_unlock")
         self.model_executor.device_unlock()
 
     def resume(
@@ -2154,6 +2157,7 @@ class EngineCoreProc(EngineCore):
         model_path: str | None = None,
     ) -> None:
         assert data_parallel_master_ip is not None
+        snapshot_scheduler_runtime(self, "resume")
         with self._transport_lock:
             if not self._transport_reconnected:
                 self._reconnect_transport(data_parallel_master_ip)

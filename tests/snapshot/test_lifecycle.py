@@ -25,6 +25,7 @@ def _engine(*, transport_reconnected: bool, dp_group=None):
         model_executor=Mock(),
         scheduler=SimpleNamespace(connector=Mock()),
         vllm_config=SimpleNamespace(
+            snapshot_config=None,
             parallel_config=parallel_config,
             kv_transfer_config=None,
         ),
@@ -40,6 +41,37 @@ def test_suspend_and_unlock_delegate_to_model_executor():
 
     engine.model_executor.suspend.assert_called_once_with("/snapshot/model")
     engine.model_executor.device_unlock.assert_called_once_with()
+
+
+def test_scheduler_runtime_order_at_snapshot_boundary():
+    engine = _engine(transport_reconnected=True)
+    events = []
+    engine.model_executor.suspend.side_effect = lambda *_: events.append(
+        "worker_suspend"
+    )
+    engine.model_executor.device_unlock.side_effect = lambda: events.append(
+        "worker_unlock"
+    )
+    engine.model_executor.resume.side_effect = lambda *_: events.append("worker_resume")
+    with (
+        patch("vllm.v1.engine.core.snapshot_scheduler_runtime") as runtime,
+        patch("vllm.v1.engine.core.get_ip", return_value="10.0.0.2"),
+        patch(
+            "vllm.v1.engine.core.refresh_scheduler_handshake_metadata_after_snapshot_restore"
+        ),
+    ):
+        runtime.side_effect = lambda _, op: events.append(f"scheduler_{op}")
+        EngineCoreProc.suspend(engine)
+        EngineCoreProc.device_unlock(engine)
+        EngineCoreProc.resume(engine, "10.0.0.3")
+    assert events == [
+        "worker_suspend",
+        "scheduler_suspend",
+        "scheduler_device_unlock",
+        "worker_unlock",
+        "scheduler_resume",
+        "worker_resume",
+    ]
 
 
 def test_model_executor_delegates_lifecycle_to_workers():
